@@ -9,6 +9,7 @@ Created on Mon Dec 16 09:08:01 2024
 
 from PIFrontModel_1DGalerkin_Modular import PIFront
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Define parameters
 N = 8            # Number of discrete ordinances
@@ -23,7 +24,7 @@ dt = 0.001       # Time step [ns]
 t_max = 3.5      # End time [ns]
 refl = 0         # Wall reflection coefficient
 
-def alpha(r, phi, basis):
+def alpha(r, phi, basis, R):
     u = 3*np.pi*(9*np.pi**2 - 64)**(-0.5)/R
     v = 8*R/(3*np.pi)
     
@@ -41,7 +42,7 @@ def alpha(r, phi, basis):
     else:
         return p*((D - v)*(D - v - q) - 1/(u**2))
     
-def beta(r, phi, basis):
+def beta(r, phi, basis, R):
     if basis == 1:
         return np.sqrt(2)/R
     elif basis == 2:
@@ -69,8 +70,24 @@ def const(r):
 # Define PIFront object
 front = PIFront(N, M, P, S, L, R, refl, dt, t_max)
 
-front.compute_basis_integrals(alpha, beta, quadriture='gauss')
+front.compute_basis_integrals(lambda r, phi, basis : alpha(r, phi, basis, R), lambda r, phi, basis : beta(r, phi, basis, R), quadriture='gauss')
 
-front.set_boundary_condition(alpha, T_s, step, pltit=False)
+front.set_boundary_condition(lambda r, phi, basis : alpha(r, phi, basis, R), T_s, step, pltit=False)
 
 front.time_step(1e-8, 50, 500)
+
+plt.title('Contours of Ionization Fraction over Time in ns')
+plt.show()
+
+# front_array = [PIFront(N, M, P, S, L, 0.1*b, refl, dt, t_max) for b in range(1, 6)]
+# for i in range(5):
+#     front_array[i].compute_basis_integrals(lambda r, phi, basis : alpha(r, phi, basis, (i + 1)*0.1), lambda r, phi, basis : beta(r, phi, basis, (i + 1)*0.1), quadriture='gauss')
+    
+#     front_array[i].set_boundary_condition(lambda r, phi, basis : alpha(r, phi, basis, (i + 1)*0.1), T_s, const, pltit=False)
+    
+#     front_array[i].time_step(1e-8, 50, 500)
+    
+# for i in range(5):
+#     front_array[i].plot_front_location()  
+# plt.legend()
+# plt.show()

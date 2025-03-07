@@ -10,7 +10,9 @@ front using an Sn method with source iteration
 
 import numpy as np
 import matplotlib.pyplot as plt
-from PI_Curvature import front_curvature_paper_data  
+import sys
+sys.path.append("..")
+import CrossSectionFunctions as xsf
 
 N = 8
 M = 100
@@ -22,19 +24,28 @@ t_max = 3
 dz = L/M
 z = np.linspace(0, L, M)
 n = 2e20 #1
-kappa = 0.87e-18 # cm^2
-sigma_s = n*5.1e-27 # cm^2
 T = 0.100 # keV
+Te_0 = 1e-5 # Initial electron temperature [eV]
+Gamma = np.array([xsf.pi_n1(2.71*T*1e3), xsf.pi_n2(2.71*T*1e3), xsf.pi_n3(2.71*T*1e3), xsf.pi_n4(2.71*T*1e3)]) # cm^2
+levels = len(Gamma) + 1 # Number of photoionization levels
+rr = np.zeros((levels - 1, ))
+Eth = np.array([14.53, 29.60, 47.45, 77.47])
+sigma_s = n*5.1e-27 # cm^2
 f = (np.ones((N, ))*0.01372*c*T**3)/(4*2.71*1.602e-25)
 a = 0 #2/(R*(np.pi))
 
 mu, w = np.polynomial.legendre.leggauss(N)
 
-nb_old = np.zeros((M, ))
-nb_guess = np.zeros((M, ))
-nb_guess[0] = 1
-nb = np.zeros((M, ))
+ni_old = np.zeros((M, levels))
+ni_old[:, 0] = np.ones((M, ))*n
+ni_guess = np.zeros((M, levels))
+ni_guess[:, 0] = np.ones((M, ))*n
+ni_guess[1, 1] = 1
+ni = np.zeros((M, levels))
+ni[:, 0] = np.ones((M, ))*n
 temp = np.zeros((M, ))
+ne = np.zeros((M, ))
+ne_old = np.zeros((M, ))
 
 psi_old = np.zeros((M, N))
 psi = np.zeros((M, N))
@@ -42,7 +53,13 @@ phi = np.matmul(psi, w)
 phi_old = np.matmul(psi, w)
 phi_it = np.matmul(psi, w)
 
+Te_old = np.ones((M, ))*Te_0
+Te = np.ones((M, ))*Te_0
+Te_it = np.ones((M, ))*Te_0
+
 plt.subplots(2, 1)
+
+err_ni = np.zeros((levels, ))
 
 for t in range(int(t_max/dt) + 1):
     err1 = n
@@ -50,22 +67,69 @@ for t in range(int(t_max/dt) + 1):
     tol = n*1e-8
     it = 0
     while((err1 > tol or err2 > tol) and it < 50):
-        psi[0, int(N/2):] = (1/(c*dt)*psi_old[0, int(N/2):] + mu[int(N/2):]*f[int(N/2):]/(dz) + sigma_s/2*phi_it[0])/(1/(c*dt) + mu[int(N/2):]/(dz) + (1 - mu[int(N/2):]**2)**(0.5)*a + (n - nb_guess[0])*kappa + sigma_s) # (n - nb_old[0])*kappa/(1 + kappa*dt*phi_old[0])
-        psi[-1, :int(N/2)] = (1/(c*dt)*psi_old[-1, :int(N/2)] + sigma_s/2*phi_it[-1])/(1/(c*dt) - mu[:int(N/2)]/(dz) + (1 - mu[:int(N/2)]**2)**(0.5)*a + (n - nb_guess[-1])*kappa + sigma_s) # (n - nb_old[-1])*kappa/(1 + kappa*dt*phi_old[-1])
+        psi[0, int(N/2):] = (1/(c*dt)*psi_old[0, int(N/2):] + mu[int(N/2):]*f[int(N/2):]/(dz) + sigma_s/2*phi_it[0])/(1/(c*dt) + mu[int(N/2):]/(dz) + (1 - mu[int(N/2):]**2)**(0.5)*a + sum(ni_guess[0, :-1]*Gamma) + sigma_s) # (n - nb_old[0])*kappa/(1 + kappa*dt*phi_old[0])
+        psi[-1, :int(N/2)] = (1/(c*dt)*psi_old[-1, :int(N/2)] + sigma_s/2*phi_it[-1])/(1/(c*dt) - mu[:int(N/2)]/(dz) + (1 - mu[:int(N/2)]**2)**(0.5)*a + sum(ni_guess[-1, :-1]*Gamma) + sigma_s) # (n - nb_old[-1])*kappa/(1 + kappa*dt*phi_old[-1])
         for j in range(1, M):
-            psi[j, int(N/2):] = (1/(c*dt)*psi_old[j, int(N/2):] + mu[int(N/2):]*psi[j - 1, int(N/2):]/(dz) + sigma_s/2*phi_it[j])/(1/(c*dt) + mu[int(N/2):]/(dz) + (1 - mu[int(N/2):]**2)**(0.5)*a + (n - nb_guess[j])*kappa + sigma_s) # (n - nb_old[j])*kappa/(1 + kappa*dt*phi_old[j])
-            psi[M - j - 1, :int(N/2)] = (1/(c*dt)*psi_old[M - j, :int(N/2)] - mu[:int(N/2)]*psi[M - j, :int(N/2)]/(dz) + sigma_s/2*phi_it[M - j])/(1/(c*dt) - mu[:int(N/2)]/(dz) + (1 - mu[:int(N/2)]**2)**(0.5)*a + (n - nb_guess[M - j])*kappa + sigma_s) # (n - nb_old[j])*kappa/(1 + kappa*dt*phi_old[M - j])
+            psi[j, int(N/2):] = (1/(c*dt)*psi_old[j, int(N/2):] + mu[int(N/2):]*psi[j - 1, int(N/2):]/(dz) + sigma_s/2*phi_it[j])/(1/(c*dt) + mu[int(N/2):]/(dz) + (1 - mu[int(N/2):]**2)**(0.5)*a + sum(ni_guess[j, :-1]*Gamma) + sigma_s) # (n - nb_old[j])*kappa/(1 + kappa*dt*phi_old[j])
+            psi[M - j - 1, :int(N/2)] = (1/(c*dt)*psi_old[M - j, :int(N/2)] - mu[:int(N/2)]*psi[M - j, :int(N/2)]/(dz) + sigma_s/2*phi_it[M - j])/(1/(c*dt) - mu[:int(N/2)]/(dz) + (1 - mu[:int(N/2)]**2)**(0.5)*a + sum(ni_guess[M - j, :-1]*Gamma) + sigma_s) # (n - nb_old[j])*kappa/(1 + kappa*dt*phi_old[M - j])
             
         phi_it = np.matmul(psi, w)
         
-        nb = ((1/dt)*nb_old + n*kappa*phi_it)/(1/dt + kappa*phi_it)
+        for j in range(M):
+            if ne[j] > 1e-10:
+                temp_T = Te_it[j]/ne[j]
+            else:
+                temp_T = 1e-5
+            rr = np.array([xsf.rr_n1(temp_T), xsf.rr_n2(temp_T), xsf.rr_n3(temp_T), xsf.rr_n4(temp_T)])
+            
+            # Define a matrix which relates the rate of change of the ionization levels
+            rate_matrix = np.zeros((levels - 1, levels - 1))
+            rate_matrix[0, 0] = 1/dt + Gamma[1]*phi_it[j] + rr[0]*ne[j]
+            rate_matrix[0, 1] = -rr[1]*ne[j]
+            rate_matrix[0, :] += Gamma[0]*phi_it[j]
+            
+            RHS = np.zeros((levels - 1, ))
+            RHS[0] = Gamma[0]*n*phi_it[j] + ni_old[j, 1]/dt
+            
+            for i in range(1, levels - 2):
+                rate_matrix[i, i - 1] = -Gamma[i]*phi_it[j]
+                rate_matrix[i, i] = 1/dt + Gamma[i + 1]*phi_it[j] + rr[i]*ne[j]
+                rate_matrix[i, i + 1] = -rr[i + 1]*ne[j]
+                
+                RHS[i] = (ni_old[j, i])/dt
+                
+            rate_matrix[-1, -1] = 1/dt + rr[-1]*ne[j]
+            rate_matrix[-1, -2] = -Gamma[-1]*phi_it[j]
+            
+            RHS[-1] = (ni_old[j, -1])/dt
+        
+            ni[j, 1:] = np.linalg.solve(rate_matrix, RHS)
+            ni[j, 0] = n - np.sum(ni[j, 1:])
+        #nb = ((1/dt)*nb_old + n*kappa*phi_it)/(1/dt + kappa*phi_it)
+        
+        ne = np.matmul(ni, np.arange(levels))
+        
+        dne = (ne - ne_old) 
+        dne += (dne < 1e-10)
+        
+        #pos_dni = dni[:, 1:]*(dni[:, 1:] > 0)
+        
+        idne = 1/dne
+        
+        Te_it[:] = Te_old + phi_it*dt*np.matmul(ni[:, :-1], (2.71*T*1e3 - Eth)*Gamma) - ne*dt*np.matmul(ni[:, 1:], (2.71*T*1e3 - Eth)*rr) #*np.pi*R**2*dz
         
         err1 = np.linalg.norm(phi - phi_it)
-        err2 = np.linalg.norm(nb - nb_guess)
         
-        nb_guess[:] = nb[:]
+        for i in range(levels):
+            err_ni[i] = np.linalg.norm(ni[:, i] - ni_guess[:, i])
+            
+        err2 = max(err_ni) #np.linalg.norm(nb - nb_guess)
+        
+        ni_guess[:] = ni[:]
         
         phi[:] = phi_it[:]
+        
+        Te[:] = Te_it[:]
         
         it += 1
     
@@ -78,7 +142,11 @@ for t in range(int(t_max/dt) + 1):
     psi = np.zeros((M, N))
     phi_old[:] = phi[:]
     
-    nb_old = nb
+    ni_old[:] = ni[:]
+    
+    ne_old[:] = ne[:]
+    
+    Te_old[:] = Te[:]
     
     # if (dt*t > p/c and p < 7):
     #     plt.figure(1)
@@ -91,51 +159,58 @@ for t in range(int(t_max/dt) + 1):
     if t == 100:
         #plt.figure(1)
         plt.subplot(2, 1, 2)
-        plt.plot(z, nb/n, label='t=0.1')
+        plt.plot(z, Te/ne, label='t=0.1')
         #plt.figure(2)
         plt.subplot(2, 1, 1)
         plt.plot(z, phi, label='t=0.1')
     elif t == 450:
         #plt.figure(1)
         plt.subplot(2, 1, 2)
-        plt.plot(z, nb/n, label='t=0.45')
+        plt.plot(z, Te/ne, label='t=0.45')
         #plt.figure(2)
         plt.subplot(2, 1, 1)
         plt.plot(z, phi, label='t=0.45')
     elif t == 750:
         #plt.figure(1)
         plt.subplot(2, 1, 2)
-        plt.plot(z, nb/n, label='t=0.75')
+        plt.plot(z, Te/ne, label='t=0.75')
         #plt.figure(2)
         plt.subplot(2, 1, 1)
         plt.plot(z, phi, label='t=0.75')
     elif t == 1000:
         #plt.figure(1)
         plt.subplot(2, 1, 2)
-        plt.plot(z, nb/n, label='t=1')
+        plt.plot(z, Te/ne, label='t=1')
         #plt.figure(2)
         plt.subplot(2, 1, 1)
         plt.plot(z, phi, label='t=1')
     elif t == 2000:
         #plt.figure(1)
         plt.subplot(2, 1, 2)
-        plt.plot(z, nb/n, label='t=2')
+        plt.plot(z, Te/ne, label='t=2')
         #plt.figure(2)
         plt.subplot(2, 1, 1)
         plt.plot(z, phi, label='t=2')
 
-        
-#plt.figure(1)
-plt.subplot(2, 1, 2)
-plt.plot(z, nb/n, label='t='+str(t_max))   
-plt.legend()
-plt.xlabel('z-location [cm]')
-plt.ylabel('Fraction of $n_B$')
 
 #plt.figure(2)
 plt.subplot(2, 1, 1)
-plt.plot(z, phi, label='t='+str(t_max))
-plt.title('Constant Basis Galerkin Model') 
-plt.legend()
+plt.plot(z, phi, label='t='+str(round(t_max, 2)))
+plt.title('Scalar Flux and Temperature over Time')
 plt.ylabel('Scalar Flux, $\phi$')
+plt.legend()
+
+plt.subplot(2, 1, 2)
+plt.plot(z, Te/ne, label='t='+str(round(t_max, 2) + ' ns'))
+plt.ylabel('Electron temperature [eV]')
+plt.xlabel('z-location [cm]')
+plt.show()
+        
+# plt.figure(1)
+fig = plt.figure(2)
+plt.plot(z, ni/n)   
+fig.legend(['n' + str(i + 1) for i in range(levels)])
+plt.title('Ionization fraction at t=' +str(t_max) + ' ns')
+plt.xlabel('z-location [cm]')
+plt.ylabel('Fraction of $n_B$')
 plt.show()

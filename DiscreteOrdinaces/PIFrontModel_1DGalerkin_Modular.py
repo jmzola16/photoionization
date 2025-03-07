@@ -61,6 +61,10 @@ class PIFront:
         # Time stepping
         self.dt = dt
         self.t_max = t_max
+        
+        # Plotting
+        self.contour_color_idx = 0
+        self.contour_colors = ['#331940', '#263849', '#5e366a', '#41506b', '#0cca98', '#35bcbf', '#00ffcc', '#90f6d7']
 
         # Physical parameters
         self.wall_reflect = c            # Wall reflection coefficient
@@ -319,11 +323,9 @@ class PIFront:
             self.front_location[t] = self.z[index]
             
             if t == plt_step or t == (int(self.t_max/self.dt)):
-                self.plot_state(plt_step)
+                #self.plot_state(plt_step)
                 self.plot_state_contour(plt_step)
                 plt_step += plt_int
-                
-        self.plot_front_location()
 
     def plot_state(self, plt_step):
         ##### PLOTTING #####
@@ -366,21 +368,24 @@ class PIFront:
         plt.show()
         
     def plot_state_contour(self, plt_step):
+        plt.figure(88)
         ions = np.zeros((M2, self.M))
         for edge in range(M2):                
             for i in range(self.S):
                 ions[edge, :] += self.nb[:, i]*self.beta(self.rho[edge], self.var_phi, i + 1)
         ions = ions/self.n
         
-        plt.contour(self.z, self.rho, ions, np.array([0.1, 0.5, 1]))
-        plt.title('Contours of ionization fraction at t=' + str(plt_step*self.dt))
+        cs = plt.contour(self.z, self.rho, ions, np.array([0.99]), colors=self.contour_colors[self.contour_color_idx])
+        ax = plt.gca()
+        ax.clabel(cs, cs.levels, fmt='t='+str(np.round(plt_step*self.dt, 2)))
         plt.ylabel('Radius [cm]')
-        plt.xlabel('Distance [cm]')
-        plt.show()    
+        plt.xlabel('Distance [cm]') 
+        self.contour_color_idx += 1
     
     def plot_front_location(self):
-        plt.plot(np.linspace(self.dt, self.t_max, int(self.t_max/self.dt) + 1), self.front_location)
+        plt.figure(99)
+        plt.plot(np.linspace(self.dt, self.t_max, int(self.t_max/self.dt) + 1), self.front_location, label='r='+str(round(self.R, 2)))
         plt.title('Distance over time of Photoionization Front')
         plt.xlabel('Time [ns]')
         plt.ylabel('Front location [cm]')
-        plt.show()
+        #plt.show()

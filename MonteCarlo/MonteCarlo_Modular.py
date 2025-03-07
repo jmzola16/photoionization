@@ -12,6 +12,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy
 import copy
+import sys
+sys.path.append("..")
+import CrossSectionFunctions as xsf
 
 # Physical constants
 a = 0.01372                         # Source spectrum [GJ/(cm^3*keV^4)]
