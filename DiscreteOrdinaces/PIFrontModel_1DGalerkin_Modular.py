@@ -317,7 +317,7 @@ class PIFront:
                 
             index = 0
             
-            while ions[index] > 0.1 and index < self.M - 1:
+            while ions[index] > 0.99 and index < self.M - 1:
                 index += 1
                 
             self.front_location[t] = self.z[index]
@@ -345,7 +345,7 @@ class PIFront:
         im = axs[0].pcolormesh(self.z, self.rho, flux)
         if (self.R/self.L) > 0.05 and (self.R/self.L) < 20:
             axs[0].axis('equal')
-        axs[0].set_ylabel('Radius [cm]')
+        axs[0].set_ylabel('Radial Position [cm]')
         axs[0].set_title('Scalar flux at t=' + str(plt_step*self.dt))
         axs[0].set_xticks([])
         fig.colorbar(im, ax=axs[0])
@@ -353,7 +353,7 @@ class PIFront:
         im = axs[1].pcolormesh(self.z, self.rho, (((4*flux*2.7*self.Ts*1.6022e-25)/(0.01372*self.c))**(0.25))/self.Ts)
         if (self.R/self.L) > 0.1 and (self.R/self.L) < 10:
             axs[1].axis('equal')
-        axs[1].set_ylabel('Radius [cm]')
+        axs[1].set_ylabel('Radial Position [cm]')
         axs[1].set_title('T/Ts')
         axs[1].set_xticks([])
         fig.colorbar(im, ax=axs[1])
@@ -361,8 +361,8 @@ class PIFront:
         im = axs[2].pcolormesh(self.z, self.rho, ions)
         if (self.R/self.L) > 0.1 and (self.R/self.L) < 10:
             axs[2].axis('equal')
-        plt.xlabel('Distance [cm]')
-        axs[2].set_ylabel('Radius [cm]')
+        plt.xlabel('z-location [cm]')
+        axs[2].set_ylabel('Radial Position [cm]')
         plt.title('Ionization fraction at t=' + str(plt_step*self.dt))
         fig.colorbar(im, ax = axs[2])
         plt.show()
@@ -378,14 +378,14 @@ class PIFront:
         cs = plt.contour(self.z, self.rho, ions, np.array([0.99]), colors=self.contour_colors[self.contour_color_idx])
         ax = plt.gca()
         ax.clabel(cs, cs.levels, fmt='t='+str(np.round(plt_step*self.dt, 2)))
-        plt.ylabel('Radius [cm]')
-        plt.xlabel('Distance [cm]') 
+        plt.ylabel('Radial Position [cm]')
+        plt.xlabel('z-location [cm]')
         self.contour_color_idx += 1
     
     def plot_front_location(self):
         plt.figure(99)
-        plt.plot(np.linspace(self.dt, self.t_max, int(self.t_max/self.dt) + 1), self.front_location, label='r='+str(round(self.R, 2)))
-        plt.title('Distance over time of Photoionization Front')
+        plt.plot(np.linspace(self.dt, self.t_max, int(self.t_max/self.dt) + 1), self.front_location, label='r='+str(np.round(self.R, 2))+' cm')
+        plt.title('Propagation of Photoionization Front')
         plt.xlabel('Time [ns]')
         plt.ylabel('Front location [cm]')
         #plt.show()

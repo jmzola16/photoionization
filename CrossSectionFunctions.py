@@ -6,12 +6,40 @@ Created on Thu Feb 27 17:34:29 2025
 """
 
 import numpy as np
+import scipy
 
 def blackbody(nu, T):
-    h = 4.135e-15   # Planck's constant [eV-s]
-    c = 30          # Speed of light [cm/ns]
+    """
+    Parameters
+    ----------
+    nu : double
+        The photon frequency at which to evaluate the blackbody distribution in
+        Hz
+    T : double
+        The temperature of the blackbody emitter in keV
 
-    return 2*h*nu**3/(c**2)*1/(np.exp(h*nu/T) - 1)
+    Returns
+    -------
+    e : double
+        The energy density in [keV/cm^2] of photons of energy h*nu for a blackbody 
+        emitter at temperature T
+    """
+    h = 4.135e-9     # Planck's constant [keV-ns]
+    c = 30           # Speed of light [cm/ns]
+
+    e = 2*h*nu**3/(c**2)*1/(np.exp(h*nu/T) - 1)     # Energy density [keV/cm^2]
+
+    return e
+
+def sample_blackbody(T, xi):
+    a = 0.01372         # Source spectrum [GJ/(cm^3*keV^4)]
+    c = 30              # Speed of light [cm/ns]
+    keV2GJ = 1.602e-25  # Conversion factor for keV to GJ
+    h = 4.135e-9        # Planck's constant [keV-ns]
+    
+    nu0 = 2.71*T/h
+    sol = scipy.optimize.root(lambda nu : 4*np.pi*scipy.integrate.quad(lambda nu_prime : blackbody(nu_prime, T), 1e6, nu)[0] - (a*c*T**4/keV2GJ)*xi, nu0, jac=lambda nu : 4*np.pi*blackbody(nu, T))
+    return sol.x[0]
 
 def pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E):
     # The fit equation for photoionization cross section
@@ -24,7 +52,8 @@ def pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E):
     return sigma0*((x - 1)**2 + yw**2)*y**(0.5*P - 5.5)*(1 + np.sqrt(y/ya))**(-P)*mb2cm2
 
 def pi_n1(E):
-    E0 = 1.240
+    # Input - energy in keV
+    E0 = 1.240e-3
     sigma0 = 1.745e3
     ya = 3.784
     P = 17.64
@@ -35,7 +64,8 @@ def pi_n1(E):
     return pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
 
 def pi_n2(E):
-    E0 = 1.386
+    # Input - energy in keV
+    E0 = 1.386e-3
     sigma0 = 59.67
     ya = 31.75
     P = 8.943
@@ -46,7 +76,8 @@ def pi_n2(E):
     return pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
 
 def pi_n3(E):
-    E0 = 0.1723
+    # Input - energy in keV
+    E0 = 0.1723e-3
     sigma0 = 6.753e2
     ya = 3.852e2
     P = 6.822
@@ -57,7 +88,8 @@ def pi_n3(E):
     return pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
     
 def pi_n4(E):
-    E0 = 0.2044
+    # Input - energy in keV
+    E0 = 0.2044e-3
     sigma0 = 0.8659
     ya = 4.931e2
     P = 8.785
@@ -68,7 +100,8 @@ def pi_n4(E):
     return pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
     
 def pi_n5(E):
-    E0 = 7.824
+    # Input - energy in keV
+    E0 = 7.824e-3
     sigma0 = 68.64
     ya = 32.10
     P = 5.495
@@ -94,7 +127,7 @@ def rrxs_fitequation(A, B, T0, T1, T, **kwargs):
     return is2ins*A/(np.sqrt(T/T0)*(1 + np.sqrt(T/T0))**(1 - B)*(1 + np.sqrt(T/T1))**(1 + B))
 
 def rr_n1(T):
-    k = 8.6133e-5 # Boltzmann constant in eV/K
+    k = 8.6133e-8 # Boltzmann constant in keV/K
     A = 6.622e-11
     B = 0.6109
     T0 = 4.136*k
@@ -105,7 +138,7 @@ def rr_n1(T):
     return rrxs_fitequation(A, B, T0, T1, T, C=C, T2=T2)
 
 def rr_n2(T):
-    k = 8.6133e-5 # Boltzmann constant in eV/K
+    k = 8.6133e-8 # Boltzmann constant in keV/K
     A = 2.096e-9
     B = 0.7668
     T0 = 0.1602*k
@@ -116,7 +149,7 @@ def rr_n2(T):
     return rrxs_fitequation(A, B, T0, T1, T, C=C, T2=T2)
 
 def rr_n3(T):
-    k = 8.6133e-5 # Boltzmann constant in eV/K
+    k = 8.6133e-8 # Boltzmann constant in keV/K
     A = 2.501e-9
     B = 0.7844
     T0 = 0.5235*k
@@ -127,7 +160,7 @@ def rr_n3(T):
     return rrxs_fitequation(A, B, T0, T1, T, C=C, T2=T2)
 
 def rr_n4(T):
-    k = 8.6133e-5 # Boltzmann constant in eV/K
+    k = 8.6133e-8 # Boltzmann constant in keV/K
     A = 3.955e-9
     B = 0.7813
     T0 = 0.6821*k
@@ -136,10 +169,63 @@ def rr_n4(T):
     return rrxs_fitequation(A, B, T0, T1, T)
 
 def rr_n5(T):
-    k = 8.6133e-5 # Boltzmann constant in eV/K
+    k = 8.6133e-8 # Boltzmann constant in keV/K
     A = 1.724e-10
     B = 0.6556
     T0 = 3.372e2*k
     T1 = 1.030e7*k
     
     return rrxs_fitequation(A, B, T0, T1, T)
+
+def sigma_fitequation(dE, P, A, X, k, Te):
+    U = dE/Te 
+
+    return A*(1 + P*U**0.5)/(X + U)*U**k*np.exp(-U)
+
+def sigma_n1(Te):
+    dE = 14.5e-3    # Ionization energy in [keV]
+    P = 0           # 
+    A = 0.482e-7    # Rate coefficient [cm^3/s]
+    X = 0.0652
+    k = 0.42
+
+    return sigma_fitequation(dE, P, A, X, k, Te)
+
+def sigma_n2(Te):
+    dE = 29.6e-3    # Ionization energy in [keV]
+    P = 0           # 
+    A = 0.298e-7    # Rate coefficient [cm^3/s]
+    X = 0.310
+    k = 0.30
+
+    return sigma_fitequation(dE, P, A, X, k, Te)
+
+def sigma_n3(Te):
+    dE = 47.5e-3    # Ionization energy in [keV]
+    P = 1           # 
+    A = 0.810e-8    # Rate coefficient [cm^3/s]
+    X = 0.350
+    k = 0.24
+
+    return sigma_fitequation(dE, P, A, X, k, Te)
+
+def sigma_n4(Te):
+    dE = 77.5e-3    # Ionization energy in [keV]
+    P = 1           # 
+    A = 0.371e-8    # Rate coefficient [cm^3/s]
+    X = 0.549
+    k = 0.18
+
+    return sigma_fitequation(dE, P, A, X, k, Te)
+
+def sigma_n5(Te):
+    dE = 97.9e-3    # Ionization energy in [keV]
+    P = 0           # 
+    A = 0.151e-8    # Rate coefficient [cm^3/s]
+    X = 0.0167
+    k = 0.74
+
+    return sigma_fitequation(dE, P, A, X, k, Te)
+
+def cv(T, rho):
+    return 1.5*rho

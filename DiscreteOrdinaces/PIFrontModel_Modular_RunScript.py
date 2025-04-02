@@ -54,12 +54,12 @@ def beta(r, phi, basis, R):
     elif basis == 5:
         return np.sqrt(18/R**18)*(70*r**8 - 140*r**6*R**2 + 90*r**4*R**4 - 20*r**2*R**6 + R**8)
 
-def gaussian(r):
+def gaussian(r, R):
     std_dev = R/3
     
     return 1/(std_dev*(2*np.pi)**(0.5))*np.exp(-r**2/(2*std_dev**2))
 
-def step(r):
+def step(r, R):
     r0 = 0.75*R
     
     return (r <= r0)*1
@@ -68,26 +68,29 @@ def const(r):
     return r*0 + 1
 
 # Define PIFront object
-front = PIFront(N, M, P, S, L, R, refl, dt, t_max)
+# front = PIFront(N, M, P, S, L, R, refl, dt, t_max)
 
-front.compute_basis_integrals(lambda r, phi, basis : alpha(r, phi, basis, R), lambda r, phi, basis : beta(r, phi, basis, R), quadriture='gauss')
+# front.compute_basis_integrals(lambda r, phi, basis : alpha(r, phi, basis, R), lambda r, phi, basis : beta(r, phi, basis, R), quadriture='gauss')
 
-front.set_boundary_condition(lambda r, phi, basis : alpha(r, phi, basis, R), T_s, step, pltit=False)
+# front.set_boundary_condition(lambda r, phi, basis : alpha(r, phi, basis, R), T_s, lambda r : step(r, R), pltit=False)
 
-front.time_step(1e-8, 50, 500)
+# front.time_step(1e-8, 50, 500)
 
-plt.title('Contours of Ionization Fraction over Time in ns')
-plt.show()
-
-# front_array = [PIFront(N, M, P, S, L, 0.1*b, refl, dt, t_max) for b in range(1, 6)]
-# for i in range(5):
-#     front_array[i].compute_basis_integrals(lambda r, phi, basis : alpha(r, phi, basis, (i + 1)*0.1), lambda r, phi, basis : beta(r, phi, basis, (i + 1)*0.1), quadriture='gauss')
-    
-#     front_array[i].set_boundary_condition(lambda r, phi, basis : alpha(r, phi, basis, (i + 1)*0.1), T_s, const, pltit=False)
-    
-#     front_array[i].time_step(1e-8, 50, 500)
-    
-# for i in range(5):
-#     front_array[i].plot_front_location()  
-# plt.legend()
+# plt.title('Contours of Ionization Fraction over Time in ns')
 # plt.show()
+
+front_array = [PIFront(N, M, P, S, L, 0.1*b, refl, dt, t_max) for b in range(1, 6)]
+for i in range(5):
+    front_array[i].compute_basis_integrals(lambda r, phi, basis : alpha(r, phi, basis, (i + 1)*0.1), lambda r, phi, basis : beta(r, phi, basis, (i + 1)*0.1), quadriture='gauss')
+    
+    front_array[i].set_boundary_condition(lambda r, phi, basis : alpha(r, phi, basis, (i + 1)*0.1), T_s, const, pltit=False)
+    
+    front_array[i].time_step(1e-8, 50, 500)
+    
+    plt.title('Contours of Ionization Fraction over Time in ns for r=' + str(np.round((i + 1)*0.1, 2)))
+    plt.show()
+    
+for i in range(5):
+    front_array[i].plot_front_location()  
+plt.legend()
+plt.show()
