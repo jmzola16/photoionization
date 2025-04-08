@@ -14,7 +14,7 @@ def blackbody(nu, T):
     ----------
     nu : double
         The photon frequency at which to evaluate the blackbody distribution in
-        Hz
+        GHz
     T : double
         The temperature of the blackbody emitter in keV
 

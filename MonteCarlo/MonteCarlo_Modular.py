@@ -190,7 +190,7 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
                 
                 dni[current_cell, i] -= photoi
                 dni[current_cell, i + 1] += photoi
-                dT[current_cell] += photoi*(h*p.nu - Eth[i])/(xsf.cv(T, np.sum(ni, 2) + ne))
+                dT[current_cell] += photoi*(h*p.nu - Eth[i])/(xsf.cv(T, n + ne[current_cell]))
             
             p.reduce_weight(s, Gamma_tot)
         
@@ -209,10 +209,10 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
         
         dni[:, i] += recomb
         dni[:, i + 1] -= recomb
-        dT -= recomb*(Eth[i] + 1.5*T)/(xsf.cv(T, np.sum(ni, 2) + ne))
+        dT -= recomb*(Eth[i] + 1.5*T)/(xsf.cv(T, n + ne))
         
     dne = np.matmul(dni[:, 1:], np.arange(1, levels))
-    dT -= 1.5*T*dne/(xsf.cv(T, np.sum(ni, 2) + ne))
+    dT -= 1.5*T*dne/(xsf.cv(T, n + ne))
 
     return census, flux, dT, dni, energy_density
 
