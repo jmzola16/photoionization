@@ -14,11 +14,14 @@ import copy
 import sys
 sys.path.append("..")
 import CrossSectionFunctions as xsf
+from numba.experimental import jitclass
+from numba.typed import List
+from numba import int64, float64, typeof, jit
 
 # Physical constants
 a = 0.01372                         # Source spectrum [GJ/(cm^3*keV^4)]
 c = 30                              # Speed of light [cm/ns]
-sigma_SB = a*c/4                    # Stefan-Boltzmann constant [GJ/(cm^2*ns*keV^4)]
+sigma_SB = a*c/(4*np.pi)            # Stefan-Boltzmann constant [GJ/(cm^2*ns*ster*keV^4)]
 keV2GJ = 1.602e-25                  # Conversion factor from keV to GJ
 h = 4.415e-9                        # Planck's constant [keV-ns]
 keV2J = 1.602e-16                   # Conversion factor from keV to J
@@ -27,26 +30,40 @@ Na = 6.6022e23                      # Avogadro's number [#/mol]
 rho_N = 0.02802                     # Molar mass of Nitrogen [kg/mol]
 
 # Problem setup
-N_source = 1000                     # Number of particles sourced per iteration
+N_source = 100                     # Number of particles sourced per iteration
 N_recomb_tot = 10                   # Number of particles from recombination per cell
 M = 100                             # Number of cells
 edges = np.linspace(0, 0.7, M + 1)  # Cell edge location [cm]
 flux = np.zeros((M, ))              # Scalar flux in each cell
 T = np.ones((M, ))*1e-5             # Material temperature in each cell [keV]
-t_max = 3                           # Maximum time
+t_max = 1                           # Maximum time
 dt = 0.0005                         # Time step [ns]
 Ts = 0.1                            # Source temperature [keV]
-n = 2e20                            # Number density of particles in medium [particles/cm^3]
-Gamma_nu = [xsf.pi_n1, xsf.pi_n2, xsf.pi_n3, xsf.pi_n4]  # Photoionization microscopic cross-section [cm^2]
-R = [xsf.rr_n1, xsf.rr_n2, xsf.rr_n3, xsf.rr_n4]      # Radiative recombination rate constant [cm^2/s]
+n = 4.3e20                            # Number density of particles in medium [particles/cm^3]
+
+# Define material 
+mat = xsf.Nitrogen()
+
+Gamma_nu = [mat.pi_n1, mat.pi_n2, mat.pi_n3, mat.pi_n4, mat.pi_n5, mat.pi_n6, mat.pi_n7]  # Photoionization microscopic cross-section [cm^2]
+R = [mat.rr_n1, mat.rr_n2, mat.rr_n3, mat.rr_n4, mat.rr_n5, mat.rr_n6, mat.rr_n7]      # Radiative recombination rate constant [cm^2/s]
 levels = len(Gamma_nu) + 1             # Number of ionization levels
-Eth = np.array([14.53, 29.60, 47.45, 77.47])*1e-3   # Threshhold energy [keV]
+Eth = mat.Eth   # Threshhold energy [keV]
 N_recomb = np.zeros((M, levels - 1)) # The number of particles to source from each ionization level
 # cv = 741/(keV2J*k_B)*(n/(Na)*rho_N)  # Material specific heat [keV/(keV*cm^3)]
 #Sigma = np.ones((M, ))*n*sigma_a    # Macroscopic photoionization cross-section
 
-emission_rate = dt*sigma_SB*Ts**4/(keV2GJ)  # Energy density of photons emitted [keV/(cm^2)]
+emission_rate = dt*4*np.pi*sigma_SB*Ts**4/(keV2GJ)  # Specific intensity of photons emitted [keV/(cm^2)]
 
+spec = [
+    ('x', float64),
+    ('mu', float64),
+    ('nu', float64),
+    ('w', float64),
+    ('cell', int64),
+    ('timestep_dist', float64),
+]
+
+@jitclass(spec)
 class Particle:
     def __init__(self, x, mu, nu, w, cell, timestep_dist):
         self.x = x
@@ -68,7 +85,7 @@ class Particle:
             # Else move the particle within the cell
             path_length = self.timestep_dist
             self.x += self.timestep_dist*self.mu
-            self.timestep_dist = 0
+            self.timestep_dist = 0.0
             
         # Return the distance travelled
         return abs(path_length)
@@ -77,29 +94,44 @@ class Particle:
         # Reduce the particle length by the path length traveled
         self.w *= np.exp(-Sigma*path_length)
 
+    def copy(self):
+        # Return a deep copy of a particle object, for use in copying the census list
+        copied_particle = Particle(self.x, self.mu, self.nu, self.w, self.cell, self.timestep_dist)
+        return copied_particle
+    
+@jit
 def source_particles(census, rng, dt, source_loc, w0, number, **kwargs):
     flag = 0
     for key, value in kwargs.items():
+        # Determine how to source particles: via blackbody radiation or radiative recombination
         if key == 'blackbody':
+            # The keyword argument is a blackbody temperature
             Ts = value
             flag = 1
         elif key == 'recombination':
+            # The keyword argument is a threshhold energy
             Eth = value
             flag = 2
+        elif key == 'temperature':
+            # The keyword argument is an electron temperature
+            Te = value
     
     if flag == 0:
+        # Default: blackbody radiation with 0.1 keV source temperature
         flag = 1
         Ts = 0.1
     
     for i in range(number):
-        mu = np.sqrt(rng.random())
+        # For each particle to source, parameters
         start_time = dt*rng.random()
+        xi = rng.random(5)
         
         if flag == 1:
-            xi = rng.random()
+            mu = np.sqrt(rng.random())
             nu = xsf.sample_blackbody(Ts, xi)
         elif flag == 2:
-            nu = Eth/h
+            mu = 2*rng.random() - 1
+            nu = (Eth + xsf.sample_maxwellian(T, xi[0]))/h
             
         timestep_dist = c*dt
         
@@ -127,7 +159,7 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
         # Source new particles for this timestep
         mu = np.sqrt(rng.random())
         start_time = dt*rng.random()
-        xi = rng.random()
+        xi = rng.random(5)
         
         nu = xsf.sample_blackbody(Ts, xi)
         photon = Particle(edges[source_loc], mu, nu, w0/(h*nu), source_loc, (dt - start_time)/dt*timestep_dist)
@@ -135,31 +167,39 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
     
     ne = np.matmul(ni[:, 1:], np.arange(1, levels))
     
-    # R_tot = np.zeros((M, ))
-    # w1 = np.zeros((M, levels - 1))
-    # for i in range(levels - 1):
-    #     N_recomb[:, i] = N_recomb_tot*R[i](T)
-    #     w1[:, i] = ne*ni[:, i + 1]*R[i](T)*dt
-    #     R_tot += R[i](T)
+    R_tot = np.zeros((M, ))
+    w1 = np.zeros((M, levels - 1))
+    for i in range(levels - 1):
+        N_recomb[:, i] = N_recomb_tot*R[i](T)*(T > 1e-5)
+        w1[:, i] = ne*ni[:, i + 1]*R[i](T)*dt
+        R_tot += R[i](T)
     
-    # for i in range(levels - 1):
-    #     N_recomb[:, i] = np.ceil(N_recomb[:, i]/R_tot)
-    #     for j in range(M):
-    #         for k in range(int(N_recomb[j, i])):
-    #             mu = np.sqrt(rng.random())
-    #             start_time = dt*rng.random()
-    #             xi = rng.random()
+    for i in range(levels - 1):
+        N_recomb[:, i] = np.ceil(N_recomb[:, i]/R_tot)
+        for j in range(M):
+            for k in range(int(N_recomb[j, i])):
+                mu = np.sqrt(rng.random())
+                start_time = dt*rng.random()
+                xi = rng.random()
             
-    #             nu = Eth[i]/h
-    #             photon = Particle(edges[j], mu, nu, w1[j, i], j, (dt - start_time)/dt*timestep_dist)
-    #             census.append(photon)
+                nu = (Eth[i] + xsf.sample_maxwellian(T[j], xi))/h
+                photon = Particle(edges[j], mu, nu, w1[j, i]/int(N_recomb[j, i]), j, (dt - start_time)/dt*timestep_dist)
+                census.append(photon)
     
     index = 0
     flux = np.zeros((M, ))
     energy_density = np.zeros((M, ))
     dni = np.zeros((M, levels))
+    alpha = np.zeros((M, levels - 1))
+
+    # Define energy/temperatures
+    dEpi = np.zeros((M, ))
+    dErr = np.zeros((M, ))
+    dEsp = np.zeros((M, ))
     dT = np.zeros((M, ))
-    
+    tot_photoi = np.zeros((M, levels - 1))
+
+
     while index < len(census):
         p = census[index]
         # For every particle in the system
@@ -186,11 +226,14 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
             energy_density[current_cell] += dflux*h*p.nu/c
             
             for i in range(levels - 1):
+                # Calculate the number of photoionized particles for this ionization state
+                # If this would photoionize more than remaining particles, reduce to zero instead
                 photoi = min(ni_old[current_cell, i] + dni[current_cell, i], Gamma[i]*dflux*dt)
                 
                 dni[current_cell, i] -= photoi
                 dni[current_cell, i + 1] += photoi
-                dT[current_cell] += photoi*(h*p.nu - Eth[i])/(xsf.cv(T, n + ne[current_cell]))
+                tot_photoi[current_cell, i] += photoi
+                dEpi[current_cell] += photoi*(h*p.nu - Eth[i])
             
             p.reduce_weight(s, Gamma_tot)
         
@@ -205,16 +248,23 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
             index += 1
     
     for i in range(levels - 1):
+        # Calculate the number of ions which recombine at this temperature
         recomb = np.min(np.array([ni_old[:, i + 1] + dni[:, i + 1], ne*ni[:, i + 1]*R[i](T)*dt]), axis=0)
         
         dni[:, i] += recomb
         dni[:, i + 1] -= recomb
-        dT -= recomb*(Eth[i] + 1.5*T)/(xsf.cv(T, n + ne))
+        dErr += recomb*(Eth[i] + 1.5*T)
+
+        for j in range(M):
+            alpha[j, i] = 0 if tot_photoi[j, i] == 0 else recomb[j]/tot_photoi[j, i]
         
     dne = np.matmul(dni[:, 1:], np.arange(1, levels))
-    dT -= 1.5*T*dne/(xsf.cv(T, n + ne))
+    for i in range(M):
+        dEsp[i] = mat.E_spectral(T[i], ni[i, :])*dt
 
-    return census, flux, dT, dni, energy_density
+    dT += (dEpi - dErr - dEsp - 1.5*T*dne)/(xsf.cv(T, n + ne))
+
+    return census, flux, dT, dni, energy_density, alpha
 
 def iterative_solver(census, ni, T, tol, max_it, emission_rate, seed):
     # Define error metrics and max iterations
@@ -222,7 +272,10 @@ def iterative_solver(census, ni, T, tol, max_it, emission_rate, seed):
     err = np.ones((3, ))*n
     
     # Copy the initial population which can be reused in each iteration
-    population = copy.deepcopy(census)
+    population = List()
+    for i in range(len(census)):
+        population.append(census[i].copy())
+    #population = copy.deepcopy(census)
     T_old = T.copy()
     T_previt = T.copy()
     flux = np.zeros((M, ))
@@ -230,8 +283,11 @@ def iterative_solver(census, ni, T, tol, max_it, emission_rate, seed):
     ni_old = ni.copy()
     ni_previt = ni.copy()
     while (max(abs(err)) > tol and it < max_it):
-        census = copy.deepcopy(population)
-        census, flux, dT, dni, energy_density = advance_particles(census, ni, T, emission_rate, seed, ni_old)
+        census = List()
+        for i in range(len(population)):
+            census.append(population[i].copy())
+        #census = copy.deepcopy(population)
+        census, flux, dT, dni, energy_density, alpha = advance_particles(census, ni, T, emission_rate, seed, ni_old)
         
         # Calculate the update to ionization level and associated error
         #dnb = sigma_a*(n - nb)*flux*dt
@@ -251,7 +307,7 @@ def iterative_solver(census, ni, T, tol, max_it, emission_rate, seed):
         
         it += 1
         
-    return census, ni, flux, T, energy_density
+    return census, ni, flux, T, energy_density, alpha
 
 def plot_ionization_level(edges, ni, n, t):
     z_loc = edges[:-1] + np.diff(edges)
@@ -259,18 +315,29 @@ def plot_ionization_level(edges, ni, n, t):
     plt.xlabel('z-location [cm]')
     plt.ylabel('Ion fraction')
     plt.legend(['n'+ str(i) for i in range(levels)])
-    plt.title('Ion fraction at t='+ str(np.round(t, 2)))
+    plt.title('Ion fraction at t='+ str(np.round(t, 2)) + ' ns')
     plt.show()
+
+def plot_average_ionization_level(edges, ni, n, t):
+    plt.figure(1)
+    z_loc = edges[:-1] + np.diff(edges)
+    z_bar = np.zeros((len(z_loc), ))
+    for i in range(levels):
+        z_bar += i*ni[:, i]/n
+    plt.plot(z_loc, z_bar, label='t='+str(np.round(t, 2)))
+    plt.xlabel('z-location [cm]')
+    plt.ylabel(r'$ \overline{Z} $')
     
 def temperature_plots(edges, energy_denisty, T, t):
+    plt.figure(11)
     plt.subplot(2, 1, 2)
     z_loc = edges[:-1] + np.diff(edges)
     plt.plot(z_loc, T, label='t='+str(np.round(t, 2)))
     plt.xlabel('z-location [cm]')
     plt.ylabel('Material temperature [keV]')
     plt.subplot(2, 1, 1)
-    plt.plot(z_loc, energy_density, t)
-    plt.ylabel('Energy Density [keV/$cm^3$]')
+    plt.plot(z_loc, (energy_density*keV2GJ/a)**0.25, label='t='+str(np.round(t, 2)))
+    plt.ylabel('Radiation temperature [keV]')
     
 def two_state_plots(edges, ni, n, energy_density, t):
     plt.subplot(2, 1, 2)
@@ -280,45 +347,102 @@ def two_state_plots(edges, ni, n, energy_density, t):
     plt.ylabel('Ion fraction')
     plt.subplot(2, 1, 1)
     plt.plot(z_loc, energy_density, t)
-    plt.ylabel('Energy Density [keV/$cm^3$]')
-    
+    plt.ylabel('Rad. Energy Density [keV/cm$^3$]')
 
-census=[]
+def alpha_plot(edges, alpha, t):
+    plt.figure(22)
+    z_loc = edges[:-1] + np.diff(edges)
+    plt.plot(z_loc, alpha)
+    plt.title(r'$ \alpha $ at t=' + str(round(t, 2)))
+    plt.xlabel('z-location [cm]')
+    plt.ylabel(r'$ \alpha $ [-]')
+    plt.legend(['n' + str(i) for i in range(levels)])
+
+def write_data(file, t, energy_density, T, ni):
+    f = open(file, 'a')
+    f.write('{:4.2g}'.format(t))
+    f.write('\n\n')
+    form = ''
+    for i in range(M):
+        form += '{:e}, '.format(energy_density[i])
+    f.write(form)
+    f.write('\n\n')
+
+    form = ''
+    for i in range(M):
+        form += '{:e}, '.format(T[i])
+    f.write(form)
+    f.write('\n\n')
+
+    for i in range(M):
+        form = ''
+        for j in range(levels):
+            form += '{:e}, '.format(ni[i, j])
+
+        f.write(form + '\n')
+    
+    f.write('\n')
+    f.close()
+
+type_photon = Particle(0.1, 0.5, 800.0, 1.0, 0, 0.0)
+census = List.empty_list(typeof(type_photon))
 ni = np.zeros((M, levels))
 ni[:, 0] = np.ones((M, ))*n
+path = '../Data/'
+file = path + 'MC_Nitrogen_Reemission_t=' + str(round(t_max, 2)) + '.txt'
+f = open(file, 'w')
+f.close()
 for t in range(int(t_max/dt) + 1):
     #print("Time step: ", t)
-    census, ni, flux, T, energy_density = iterative_solver(census, ni, T, 1e-8*n, 100, emission_rate, t)
+    census, ni, flux, T, energy_density, alpha = iterative_solver(census, ni, T, 1e-8*n, 100, emission_rate, t)
     
     if t == 200:
         # two_state_plots(edges, ni, n, energy_density, t*dt)
         # ADD CONSISTANT FIGURE/AXIS NUMBER FOR PLOTS
         temperature_plots(edges, energy_density, T, t*dt)
+        plot_average_ionization_level(edges, ni, n, t*dt)
+        alpha_plot(edges, alpha, t*dt)
+        write_data(file, np.round(t*dt, 2), energy_density, T, ni)
         print(t*dt)
     elif t == 900:
         # two_state_plots(edges, ni, n, energy_density, t*dt)
         temperature_plots(edges, energy_density, T, t*dt)
+        plot_average_ionization_level(edges, ni, n, t)
+        write_data(file, np.round(t*dt, 2), energy_density, T, ni)
         print(t*dt)
     elif t == 1500:
         # two_state_plots(edges, ni, n, energy_density, t*dt)
         temperature_plots(edges, energy_density, T, t*dt)
+        plot_average_ionization_level(edges, ni, n, t)
+        write_data(file, np.round(t*dt, 2), energy_density, T, ni)
         print(t*dt)
     elif t == 2000:
         # two_state_plots(edges, ni, n, energy_density, t*dt)
         temperature_plots(edges, energy_density, T, t*dt)
+        plot_average_ionization_level(edges, ni, n, t)
+        write_data(file, np.round(t*dt, 2), energy_density, T, ni)
         print(t*dt)
     elif t == 4000:
         # two_state_plots(edges, ni, n, energy_density, t*dt)
         temperature_plots(edges, energy_density, T, t*dt)
+        plot_average_ionization_level(edges, ni, n, t)
+        write_data(file, np.round(t*dt, 2), energy_density, T, ni)
         print(t*dt)
 
 # for t in range(int(t_max/dt) + 1):
 #     census, flux = advance_particles(census, Sigma, flux*0, emission_rate, t)
 
 # two_state_plots(edges, ni, n, energy_density, t_max*dt)
+plt.figure(11)
 temperature_plots(edges, energy_density, T, t_max)
+plt.legend()
+plt.show()
+
+plot_average_ionization_level(edges, ni, n, t)
 plt.legend()
 plt.show()
 
 plot_ionization_level(edges, ni, n, t_max)
 plt.show()
+
+write_data(file, np.round(t*dt, 2), energy_density, T, ni)

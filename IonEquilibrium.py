@@ -13,21 +13,18 @@ Eph = 2.71*Ts           # Energy per photon [keV]
 h = 4.135e-9            # Planck's constant [keV/ns]
 flux = 0.5*sigma_SB*Ts**4*GJ2keV/Eph    # Scalar flux of photons [#/(cm^2 ns)]
 n = 2e20                # Number density of atoms [#/cm^3]
-Eth = np.array([14.53, 29.60, 47.45, 77.47, 113.9])*1e-3   # Threshhold energy [keV]
-Emax = np.array([538, 558.1, 584, 614.4, 649.1])*1e-3
+mat = xsf.Nitrogen()
+Eth = np.array([14.53, 29.60, 47.45, 77.47])*1e-3   # Threshhold energy [keV]
+Emax = np.array([538, 558.1, 584, 614.4])*1e-3
 
-gamma = np.array([scipy.integrate.quad(lambda nu : xsf.pi_n1(h*nu)*xsf.blackbody(nu, Ts), Eth[0]/h, Emax[0]/h)[0], 
-                  scipy.integrate.quad(lambda nu : xsf.pi_n2(h*nu)*xsf.blackbody(nu, Ts), Eth[1]/h, Emax[1]/h)[0], 
-                  scipy.integrate.quad(lambda nu : xsf.pi_n3(h*nu)*xsf.blackbody(nu, Ts), Eth[2]/h, Emax[2]/h)[0], 
-                  scipy.integrate.quad(lambda nu : xsf.pi_n4(h*nu)*xsf.blackbody(nu, Ts), Eth[3]/h, Emax[3]/h)[0]])/(a*Ts**4*GJ2keV)
+gamma = np.array([scipy.integrate.quad(lambda nu : mat.pi_n(h*nu, i)*xsf.blackbody(nu, Ts), 
+                                       mat.Eth[i]/h, mat.Emax[0]/h)[0] for i in range(4)])/(1/(4*np.pi)*a*c*Ts**4*GJ2keV)
 
-Gamma = np.array([scipy.integrate.quad(lambda nu : xsf.pi_n1(h*nu)*xsf.blackbody(nu, Ts)*(h*nu - Eth[0]), Eth[0]/h, Emax[0]/h)[0], 
-                  scipy.integrate.quad(lambda nu : xsf.pi_n2(h*nu)*xsf.blackbody(nu, Ts)*(h*nu - Eth[1]), Eth[1]/h, Emax[1]/h)[0], 
-                  scipy.integrate.quad(lambda nu : xsf.pi_n3(h*nu)*xsf.blackbody(nu, Ts)*(h*nu - Eth[2]), Eth[2]/h, Emax[2]/h)[0], 
-                  scipy.integrate.quad(lambda nu : xsf.pi_n4(h*nu)*xsf.blackbody(nu, Ts)*(h*nu - Eth[3]), Eth[3]/h, Emax[3]/h)[0]])/(a*Ts**4*GJ2keV)
+Gamma = np.array([scipy.integrate.quad(lambda nu : mat.pi_n(h*nu, i)*xsf.blackbody(nu, Ts)*(h*nu - Eth[i]), 
+                                       mat.Eth[i]/h, mat.Emax[i]/h)[0] for i in range(4)])/(1/(4*np.pi)*a*c*Ts**4*GJ2keV)
 
-R = np.array([xsf.rr_n1(Te), xsf.rr_n2(Te), xsf.rr_n3(Te), xsf.rr_n4(Te)])
-R_fun = np.array([xsf.rr_n1, xsf.rr_n2, xsf.rr_n3, xsf.rr_n4])
+R = np.array([mat.rr_n1(Te), mat.rr_n2(Te), mat.rr_n3(Te), mat.rr_n4(Te)])
+R_fun = np.array([mat.rr_n1, mat.rr_n2, mat.rr_n3, mat.rr_n4])
 
 levels = len(Gamma) + 1
 
@@ -36,9 +33,9 @@ for i in range(levels - 1):
     ni0[i] = n/(levels)
     ni0[-1] += (i + 1)*ni0[i]
 
-ni1 = np.zeros((levels + 1, ))
-ni1[:-1] = ni0
-ni1[-1] = 0.5*Ts
+ni1 = np.zeros((levels, ))
+ni1[-2] = n
+ni1[-1] = Ts
 
 def fun(ni):
     F = np.zeros((levels, ))
@@ -55,21 +52,36 @@ def fun(ni):
 
     return F
 
-def fun_2(ni):
-    F = np.zeros((levels + 1, ))
-    F[0] = gamma[0]*flux*(n - sum(ni[0:-2])) - R_fun[0](ni[-1])*ni[0]*ni[-2] - gamma[1]*flux*ni[0] + R_fun[1](ni[-1])*ni[-2]*ni[1]
-    F[-2] += ni[0]
-    F[-1] = Gamma[0]*(n - sum(ni[0:-2]))*flux - R_fun[0](ni[-1])*ni[0]*ni[-2]*(1.5*ni[-1] + Eth[0])
+def fun_2(x):
+    F = np.zeros((levels, ))
+    ni = np.zeros((levels, ))
+    ni[0] = n - sum(x[0:-1])
+    ni[1:] = x[0:-1]
+    T = x[-1]
+    ne = np.sum(ni[1:]*np.arange(1, levels))
+
+    dni = np.zeros((levels - 1, ))
+    dT = 0
+
+    dni[0] = gamma[0]*flux*ni[0] - R_fun[0](T)*ni[1]*ne - gamma[1]*flux*ni[1] + R_fun[1](T)*ne*ni[2]
+    #F[-2] += ni[0]
+    dT = Gamma[0]*ni[0]*flux
 
     for i in range(1, levels - 2):
-        F[i] = gamma[i]*flux*ni[i - 1] - R_fun[i](ni[-1])*ni[i]*ni[-2] - gamma[i + 1]*flux*ni[i] + R_fun[i + 1](ni[-1])*ni[i + 1]*ni[-2]
-        F[-2] += (i + 1)*ni[i]
-        F[-1] += Gamma[i]*flux*ni[i - 1] - R_fun[i](ni[-1])*ni[i]*ni[-2]*(1.5*ni[-1] + Eth[i])
+        dni[i] = gamma[i]*flux*ni[i] - R_fun[i](T)*ni[i + 1]*ne - gamma[i + 1]*flux*ni[i + 1] + R_fun[i + 1](T)*ni[i + 2]*ne
+        #F[-2] += (i + 1)*ni[i]
+        dT += Gamma[i]*flux*ni[i] - R_fun[i - 1](T)*ni[i]*ne*(1.5*T + Eth[i])
 
-    F[-3] = gamma[-1]*flux*ni[-4] - R_fun[-1](ni[-1])*ni[-3]*ni[-2]
-    F[-2] += (levels - 1)*ni[-3]
-    F[-2] -= ni[-2]
-    F[-1] += Gamma[-1]*flux*ni[-4]- R_fun[-1](ni[-1])*ni[-3]*ni[-2]*(1.5*ni[-1] + Eth[i])
+    dni[-1] = gamma[-1]*flux*ni[-2] - R_fun[-1](T)*ni[-1]*ne
+    #F[-2] += (levels - 1)*ni[-3]
+    #F[-2] -= ni[-2]
+    dT += Gamma[-1]*flux*ni[-2] - R_fun[-2](T)*ni[-2]*ne*(1.5*T + Eth[-2])
+    dT -= R_fun[-1](T)*ni[-1]*ne*(1.5*T + Eth[-1])
+
+    dT /= 1.5*(n + ne)
+
+    F[:-1] = dni
+    F[-1] = dT
 
     return F
 
@@ -125,3 +137,5 @@ sol = scipy.optimize.root(fun_2, ni1)
 print(sol.success)
 print(sol.x)
 print(sol.message)
+
+print(fun_2(ni1))

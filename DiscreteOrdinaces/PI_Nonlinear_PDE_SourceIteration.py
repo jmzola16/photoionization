@@ -20,17 +20,18 @@ R = 0.1 # cm
 L = 0.7 # cm
 c = 30 # cm/ns
 dt = 0.001 # ns
-t_max = 2
+t_max = 4
 dz = L/M
 z = np.linspace(0, L, M)
-n = 2e20 #1
+n = 4.3e20 #1
 T = 0.100 # keV
-Te_0 = 1e-5 # Initial electron temperature [keV]
-Gamma = np.array([xsf.pi_n1(2.71*T), xsf.pi_n2(2.71*T), xsf.pi_n3(2.71*T), xsf.pi_n4(2.71*T)]) # cm^2
+Te_0 = 1e-2 # Initial electron temperature [keV]
+mat = xsf.Nitrogen()
+Gamma = np.array([0.98, 0.79, 0.6, 0.23, 0.12, 0.015, 0.0027])*1e-18 # cm^2
 levels = len(Gamma) + 1 # Number of photoionization levels
 rr = np.zeros((levels - 1, ))
-Eth = np.array([14.53, 29.60, 47.45, 77.47])*1e-3
-keV2J = 1.602e-19
+Eth = np.array(mat.Eth)
+keV2J = 1.602e-16
 k_B = 8.617e-8
 Na = 6.022e23
 rho_N = 0.02802
@@ -85,7 +86,7 @@ for t in range(int(t_max/dt) + 1):
             #     temp_T = Te_it[j]/ne[j]
             # else:
             #     temp_T = 1e-5
-            # rr = np.array([xsf.rr_n1(Te_it), xsf.rr_n2(Te_it), xsf.rr_n3(Te_it), xsf.rr_n4(Te_it)])
+            # rr = np.array([mat.rr_n(Te_it[j], i + 1) for i in range(levels - 1)])
             
             # Define a matrix which relates the rate of change of the ionization levels
             if levels > 2:
@@ -102,7 +103,7 @@ for t in range(int(t_max/dt) + 1):
                     rate_matrix[i, i] = 1/dt + Gamma[i + 1]*phi_it[j] + rr[i]*ne[j]
                     rate_matrix[i, i + 1] = -rr[i + 1]*ne[j]
                 
-                    RHS[i] = (ni_old[j, i])/dt
+                    RHS[i] = (ni_old[j, i + 1])/dt
                 
                 rate_matrix[-1, -1] = 1/dt + rr[-1]*ne[j]
                 rate_matrix[-1, -2] = -Gamma[-1]*phi_it[j]
@@ -117,7 +118,7 @@ for t in range(int(t_max/dt) + 1):
         
         ne = np.matmul(ni, np.arange(levels))
         
-        Te_it[:] = Te_old + (phi_it*dt*np.matmul(ni[:, :-1], (2.71*T - Eth)*Gamma) - ne*dt*np.matmul(ni[:, 1:], (2.71*T - Eth)*rr))/(cv*dz)
+        # Te_it[:] = Te_old + (phi_it*dt*np.matmul(ni[:, :-1], (2.71*T - Eth)*Gamma) - ne*dt*np.matmul(ni[:, 1:], (2.71*T + Eth)*rr))/(cv)
         
         err1 = np.linalg.norm(phi - phi_it)
         
@@ -130,7 +131,7 @@ for t in range(int(t_max/dt) + 1):
         
         phi[:] = phi_it[:]
         
-        Te[:] = Te_it[:]
+        #  Te[:] = Te_it[:]
         
         it += 1
     
@@ -147,7 +148,7 @@ for t in range(int(t_max/dt) + 1):
     
     ne_old[:] = ne[:]
     
-    Te_old[:] = Te[:]
+    # Te_old[:] = Te[:]
     
     # if (dt*t > p/c and p < 7):
     #     plt.figure(1)
@@ -191,10 +192,10 @@ for t in range(int(t_max/dt) + 1):
 
 #plt.figure(2)
 plt.subplot(2, 1, 1)
-plt.plot(z, phi*2.71*T/c, label='t='+str(round(t_max, 2)))
-plt.title('Energy Density and Ion Fraction at t = ' + str(round(t_max, 2)) + ' ns')
+plt.plot(z, (phi*2.71*T/(0.01372*c)*keV2J*1e-9)**0.25, label='t='+str(round(t_max, 2)))
+plt.title('Rad. Temp. and Ion Fraction at t = ' + str(round(t_max, 2)) + ' ns')
 #plt.title('Energy Density and Temperature over Time')
-plt.ylabel('Energy Density, [keV/$cm^3$]')
+plt.ylabel('Rad. Temperature, [keV]')
 #plt.legend()
 
 plt.subplot(2, 1, 2)
@@ -208,7 +209,7 @@ plt.subplot(2, 1, 2)
 # plt.figure(1)
 #fig = plt.figure(2)
 plt.plot(z, ni/n)   
-plt.legend(['n' + str(i + 1) for i in range(levels)])
+plt.legend(['n' + str(i) for i in range(levels)])
 # plt.title('Ionization fraction at t=' + str(round(t_max, 2)) + ' ns')
 plt.xlabel('z-location [cm]')
 plt.ylabel('Ion fraction [-]')
