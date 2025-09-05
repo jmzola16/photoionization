@@ -30,16 +30,20 @@ Na = 6.6022e23                      # Avogadro's number [#/mol]
 rho_N = 0.02802                     # Molar mass of Nitrogen [kg/mol]
 
 # Problem setup
-N_source = 100                     # Number of particles sourced per iteration
-N_recomb_tot = 10                   # Number of particles from recombination per cell
+N_max = 10000                      # Maximum number of particles for Russian Roulette
+N_source = 1000                    # Number of particles sourced per iteration
+N_recomb_tot = 10                  # Number of particles from recombination per cell
 M = 100                             # Number of cells
 edges = np.linspace(0, 0.7, M + 1)  # Cell edge location [cm]
 flux = np.zeros((M, ))              # Scalar flux in each cell
 T = np.ones((M, ))*1e-5             # Material temperature in each cell [keV]
 t_max = 1                           # Maximum time
-dt = 0.0005                         # Time step [ns]
+dt = 0.001                         # Time step [ns]
 Ts = 0.1                            # Source temperature [keV]
 n = 4.3e20                            # Number density of particles in medium [particles/cm^3]
+tol = 1e-4                          # Tolerance for iterative solver
+particle_tally = np.zeros((M, ))    # A global container which counts the number of particles in each cell
+particle_tally_backup = np.zeros((M, )) # A global backup for the particle tally for use with the iterative solver
 
 # Define material 
 mat = xsf.Nitrogen()
@@ -63,7 +67,7 @@ spec = [
     ('timestep_dist', float64),
 ]
 
-@jitclass(spec)
+#@jitclass(spec)
 class Particle:
     def __init__(self, x, mu, nu, w, cell, timestep_dist):
         self.x = x
@@ -73,22 +77,25 @@ class Particle:
         self.cell = cell
         self.timestep_dist = timestep_dist
         
-    def move(self, bounds, Sigma):
+    def move(self, bounds, particle_tally):
         # Move a particle along its direction vector
         path_length = (bounds[1] - self.x)/self.mu*(self.mu > 0) + (self.x - bounds[0])/self.mu*(self.mu < 0)
         if abs(path_length) < self.timestep_dist:
             # If the particle can reach the border of the cell within the current time step, increment its cell
             self.x += path_length*(abs(self.mu))
             self.timestep_dist -= abs(path_length)
+            particle_tally[self.cell] -= 1
             self.cell += int(np.sign(self.mu))
+            if self.cell < M and self.cell >= 0:
+                particle_tally[self.cell] += 1
         else:
             # Else move the particle within the cell
             path_length = self.timestep_dist
             self.x += self.timestep_dist*self.mu
             self.timestep_dist = 0.0
             
-        # Return the distance travelled
-        return abs(path_length)
+        # Return the distance travelled and updated particle tally
+        return abs(path_length), particle_tally
             
     def reduce_weight(self, path_length, Sigma):
         # Reduce the particle length by the path length traveled
@@ -99,8 +106,12 @@ class Particle:
         copied_particle = Particle(self.x, self.mu, self.nu, self.w, self.cell, self.timestep_dist)
         return copied_particle
     
+    def roulette(self, roulette_pool, particle_tally):
+        h = 4.135e-9
+        self.w += roulette_pool[self.cell]/(particle_tally[self.cell]*h*self.nu) # TODO: Should be number of particles in cell
+
 @jit
-def source_particles(census, rng, dt, source_loc, w0, number, **kwargs):
+def source_particles(census, particle_tally, rng, dt, source_loc, w0, number, **kwargs):
     flag = 0
     for key, value in kwargs.items():
         # Determine how to source particles: via blackbody radiation or radiative recombination
@@ -137,10 +148,12 @@ def source_particles(census, rng, dt, source_loc, w0, number, **kwargs):
         
         photon = Particle(edges[source_loc], mu, nu, w0/(h*nu), source_loc, (dt - start_time)/dt*timestep_dist)
         census.append(photon)
+
+        particle_tally[source_loc] += 1
         
     return census
 
-def advance_particles(census, ni, T, emission_rate, seed, *varargs):
+def advance_particles(census, particle_tally, ni, T, emission_rate, seed, *varargs):
     if len(varargs) > 0:
         ni_old = varargs[0]
     else:
@@ -164,9 +177,11 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
         nu = xsf.sample_blackbody(Ts, xi)
         photon = Particle(edges[source_loc], mu, nu, w0/(h*nu), source_loc, (dt - start_time)/dt*timestep_dist)
         census.append(photon)
+        particle_tally[source_loc] += 1
     
     ne = np.matmul(ni[:, 1:], np.arange(1, levels))
     
+    # Source particles from recombination
     R_tot = np.zeros((M, ))
     w1 = np.zeros((M, levels - 1))
     for i in range(levels - 1):
@@ -185,6 +200,8 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
                 nu = (Eth[i] + xsf.sample_maxwellian(T[j], xi))/h
                 photon = Particle(edges[j], mu, nu, w1[j, i]/int(N_recomb[j, i]), j, (dt - start_time)/dt*timestep_dist)
                 census.append(photon)
+
+                particle_tally[j] += 1
     
     index = 0
     flux = np.zeros((M, ))
@@ -199,7 +216,7 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
     dT = np.zeros((M, ))
     tot_photoi = np.zeros((M, levels - 1))
 
-
+    # Move particles through timestep
     while index < len(census):
         p = census[index]
         # For every particle in the system
@@ -213,7 +230,7 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
                 Gamma[i] = Gamma_nu[i](h*p.nu)*(h*p.nu >= Eth[i])*ni[current_cell, i]
                 Gamma_tot += Gamma[i]
             
-            s = p.move(edges[current_cell:(current_cell + 2)], Gamma_tot)
+            s, particle_tally = p.move(edges[current_cell:(current_cell + 2)], particle_tally)
             
             dx = edges[current_cell + 1] - edges[current_cell]
             
@@ -243,10 +260,13 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
         if p.w < cutoff or p.cell >= M or p.cell < 0:
             # If the particle has a weight below the cutoff or leaves the domain remove it
             census.pop(index)
+            if p.w < cutoff and p.cell < M and p.cell >= 0:
+                particle_tally[p.cell] -= 1
         else:
             # Move on to the next particle
             index += 1
     
+    # Calculate recombination
     for i in range(levels - 1):
         # Calculate the number of ions which recombine at this temperature
         recomb = np.min(np.array([ni_old[:, i + 1] + dni[:, i + 1], ne*ni[:, i + 1]*R[i](T)*dt]), axis=0)
@@ -257,22 +277,24 @@ def advance_particles(census, ni, T, emission_rate, seed, *varargs):
 
         for j in range(M):
             alpha[j, i] = 0 if tot_photoi[j, i] == 0 else recomb[j]/tot_photoi[j, i]
-        
+
+    # Update ionization state and temperature    
     dne = np.matmul(dni[:, 1:], np.arange(1, levels))
     for i in range(M):
         dEsp[i] = mat.E_spectral(T[i], ni[i, :])*dt
 
     dT += (dEpi - dErr - dEsp - 1.5*T*dne)/(xsf.cv(T, n + ne))
 
-    return census, flux, dT, dni, energy_density, alpha
+    return census, particle_tally, flux, dT, dni, energy_density, alpha
 
-def iterative_solver(census, ni, T, tol, max_it, emission_rate, seed):
+def iterative_solver(census, particle_tally, ni, T, tol, max_it, emission_rate, seed):
     # Define error metrics and max iterations
     it = 0
     err = np.ones((3, ))*n
     
     # Copy the initial population which can be reused in each iteration
-    population = List()
+    #population = List()
+    population = []
     for i in range(len(census)):
         population.append(census[i].copy())
     #population = copy.deepcopy(census)
@@ -282,12 +304,15 @@ def iterative_solver(census, ni, T, tol, max_it, emission_rate, seed):
     flux_old = flux.copy()
     ni_old = ni.copy()
     ni_previt = ni.copy()
+    particle_tally_backup = particle_tally.copy()
     while (max(abs(err)) > tol and it < max_it):
-        census = List()
+        #census = List()
+        census = []
         for i in range(len(population)):
             census.append(population[i].copy())
         #census = copy.deepcopy(population)
-        census, flux, dT, dni, energy_density, alpha = advance_particles(census, ni, T, emission_rate, seed, ni_old)
+        particle_tally = particle_tally_backup.copy()
+        census, particle_tally, flux, dT, dni, energy_density, alpha = advance_particles(census, particle_tally, ni, T, emission_rate, seed, ni_old)
         
         # Calculate the update to ionization level and associated error
         #dnb = sigma_a*(n - nb)*flux*dt
@@ -307,7 +332,7 @@ def iterative_solver(census, ni, T, tol, max_it, emission_rate, seed):
         
         it += 1
         
-    return census, ni, flux, T, energy_density, alpha
+    return census, particle_tally, ni, flux, T, energy_density, alpha
 
 def plot_ionization_level(edges, ni, n, t):
     z_loc = edges[:-1] + np.diff(edges)
@@ -385,7 +410,8 @@ def write_data(file, t, energy_density, T, ni):
     f.close()
 
 type_photon = Particle(0.1, 0.5, 800.0, 1.0, 0, 0.0)
-census = List.empty_list(typeof(type_photon))
+# census = List.empty_list(typeof(type_photon))
+census = []
 ni = np.zeros((M, levels))
 ni[:, 0] = np.ones((M, ))*n
 path = '../Data/'
@@ -394,9 +420,30 @@ f = open(file, 'w')
 f.close()
 for t in range(int(t_max/dt) + 1):
     #print("Time step: ", t)
-    census, ni, flux, T, energy_density, alpha = iterative_solver(census, ni, T, 1e-8*n, 100, emission_rate, t)
+    census, particle_tally, ni, flux, T, energy_density, alpha = iterative_solver(census, particle_tally, ni, T, tol*n, 100, emission_rate, t)
+    rng = np.random.default_rng()
+
+    roulette_pool = np.zeros((M, ))
+
+    # Roulette particles
+    kill_prob = N_max/len(census)
+
+    if kill_prob < 1:
+        index = 0
+        while index < len(census):
+            if rng.random() > kill_prob and particle_tally[census[index].cell] > 1:
+                dead_particle = census.pop(index)
+                roulette_pool[dead_particle.cell] += h*dead_particle.nu*dead_particle.w
+                particle_tally[dead_particle.cell] -= 1
+            else:
+                index += 1
+
+        for particle in census:
+            particle.roulette(roulette_pool, particle_tally)
+
+    roulette_pool = np.zeros((M, ))
     
-    if t == 200:
+    if t == 100:
         # two_state_plots(edges, ni, n, energy_density, t*dt)
         # ADD CONSISTANT FIGURE/AXIS NUMBER FOR PLOTS
         temperature_plots(edges, energy_density, T, t*dt)
@@ -404,25 +451,25 @@ for t in range(int(t_max/dt) + 1):
         alpha_plot(edges, alpha, t*dt)
         write_data(file, np.round(t*dt, 2), energy_density, T, ni)
         print(t*dt)
-    elif t == 900:
+    elif t == 450:
         # two_state_plots(edges, ni, n, energy_density, t*dt)
         temperature_plots(edges, energy_density, T, t*dt)
         plot_average_ionization_level(edges, ni, n, t)
         write_data(file, np.round(t*dt, 2), energy_density, T, ni)
         print(t*dt)
-    elif t == 1500:
+    elif t == 750:
+        # two_state_plots(edges, ni, n, energy_density, t*dt)
+        temperature_plots(edges, energy_density, T, t*dt)
+        plot_average_ionization_level(edges, ni, n, t)
+        write_data(file, np.round(t*dt, 2), energy_density, T, ni)
+        print(t*dt)
+    elif t == 1000:
         # two_state_plots(edges, ni, n, energy_density, t*dt)
         temperature_plots(edges, energy_density, T, t*dt)
         plot_average_ionization_level(edges, ni, n, t)
         write_data(file, np.round(t*dt, 2), energy_density, T, ni)
         print(t*dt)
     elif t == 2000:
-        # two_state_plots(edges, ni, n, energy_density, t*dt)
-        temperature_plots(edges, energy_density, T, t*dt)
-        plot_average_ionization_level(edges, ni, n, t)
-        write_data(file, np.round(t*dt, 2), energy_density, T, ni)
-        print(t*dt)
-    elif t == 4000:
         # two_state_plots(edges, ni, n, energy_density, t*dt)
         temperature_plots(edges, energy_density, T, t*dt)
         plot_average_ionization_level(edges, ni, n, t)

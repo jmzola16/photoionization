@@ -11,7 +11,7 @@ from numba import jit, int32, float64
 from numba.experimental import jitclass
 import matplotlib.pyplot as plt
 
-@jit
+#@jit
 def blackbody(nu_list, T):
     """
     Parameters
@@ -47,7 +47,7 @@ def blackbody(nu_list, T):
 
     return e
 
-@jit
+#@jit
 def sample_blackbody(T, xi):
     a = 0.01372         # Source spectrum [GJ/(cm^3*keV^4)]
     c = 30              # Speed of light [cm/ns]
@@ -67,6 +67,24 @@ def sample_blackbody(T, xi):
     #nu0 = 2.71*T/h
     #sol = scipy.optimize.root(lambda nu : 4*np.pi*scipy.integrate.quad(lambda nu_prime : blackbody(nu_prime, T), 1e6, nu)[0] - (a*c*T**4/keV2GJ)*xi, nu0, jac=lambda nu : 4*np.pi*blackbody(nu, T))
     #return sol.x[0]
+
+def integrate_planck_in_energy(hnu_low, hnu_high, T):
+    N_terms = 12
+    x_low = hnu_low/T
+    x_high = hnu_high/T
+    c = 30                  # Speed of light [cm/ns]
+    h = 4.135e-9            # Planck's constant [keV-ns]
+    nu_low = hnu_low/h
+    nu_high = hnu_high/h
+
+    flux = 0
+
+    for n in range(1, N_terms + 1):
+        nk = n*h/T
+        flux += np.exp(-n*x_high)*(-nu_high**3/nk - 3*nu_high**2/nk**2 - 3*nu_high/nk**3 - 6/nk**4) \
+                + np.exp(-n*x_low)*(nu_low**3/nk + 3*nu_low**2/nk**2 + 3*nu_low/nk**3 + 6/nk**4)
+        
+    return 2*h/c**2*flux
 
 def sample_maxwellian(T, xi):
     return 1.5*T
@@ -420,7 +438,7 @@ class Nitrogen():
 
         return Esp
 
-@jit
+#@jit
 def cv(T, rho):
     return 1.5*rho
 
