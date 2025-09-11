@@ -10,6 +10,7 @@ import scipy
 from numba import jit, int32, float64
 from numba.experimental import jitclass
 import matplotlib.pyplot as plt
+import Constants
 
 #@jit
 def blackbody(nu_list, T):
@@ -72,19 +73,33 @@ def integrate_planck_in_energy(hnu_low, hnu_high, T):
     N_terms = 12
     x_low = hnu_low/T
     x_high = hnu_high/T
-    c = 30                  # Speed of light [cm/ns]
-    h = 4.135e-9            # Planck's constant [keV-ns]
-    nu_low = hnu_low/h
-    nu_high = hnu_high/h
+    nu_low = hnu_low/Constants.h
+    nu_high = hnu_high/Constants.h
 
     flux = 0
 
     for n in range(1, N_terms + 1):
-        nk = n*h/T
+        nk = n*Constants.h/T
         flux += np.exp(-n*x_high)*(-nu_high**3/nk - 3*nu_high**2/nk**2 - 3*nu_high/nk**3 - 6/nk**4) \
                 + np.exp(-n*x_low)*(nu_low**3/nk + 3*nu_low**2/nk**2 + 3*nu_low/nk**3 + 6/nk**4)
         
-    return 2*h/c**2*flux
+    return 2*Constants.h/Constants.c**2*flux
+
+def integrate_planck_in_number(hnu_low, hnu_high, T):
+    N_terms = 12
+    x_low = hnu_low/T
+    x_high = hnu_high/T
+    nu_low = hnu_low/Constants.h
+    nu_high = hnu_high/Constants.h
+
+    flux = 0
+
+    for n in range(1, N_terms + 1):
+        nk = n*Constants.h/T
+        flux += np.exp(-n*x_low)*(nu_low**2/nk + 2*nu_low/(nk**2) + 2/(nk**3)) \
+              - np.exp(-n*x_high)*(nu_high**2/nk + 2*nu_high/(nk**2) + 2/(nk**3))
+
+    return 2/(Constants.c**2)*flux
 
 def sample_maxwellian(T, xi):
     return 1.5*T
@@ -121,6 +136,9 @@ class Nitrogen():
         self.Emax[6] = 50.000
 
     def pi_n(self, E, level):
+        if E < self.Eth[level]:
+            return 0.0
+
         match level:
             case 0:
                 return self.pi_n1(E)

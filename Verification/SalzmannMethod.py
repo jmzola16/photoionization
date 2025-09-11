@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import sys
 sys.path.append("..")
 import CrossSectionFunctions as xsf
+import Constants
 
 # Simulation parameters
 num_cells = 40
@@ -13,10 +14,6 @@ t_max = 1
 Ts = 0.100
 Tm0 = np.ones((num_cells, ))*1e-5
 Tr0 = 0.1
-a = 0.01372
-c = 30
-keV2GJ = 1.602e-25
-GJ2keV = 1/keV2GJ
 plot_interval = 0.2
 plot_time = 0.2
 mat = xsf.Nitrogen()
@@ -46,19 +43,19 @@ def plot_average_ionization_level(ni, cell_edges, max_levels, independent_variab
     plt.figure(10 + type)
     if type == 0:
         x_variable = cell_edges[:-1] + np.diff(cell_edges)/2
-        Z_bar = ni[1:, ].T*np.arange(1, max_levels + 1)
+        Z_bar = np.sum(ni[1:, ].T*np.arange(1, max_levels + 1)/4.3e20, axis=1)
         x_label = "Cell position [cm]"
         legend_unit = " ns"
     else:
         x_variable = varargs[0]
         cell_index = np.searchsorted(cell_edges, independent_variable)
-        Z_bar = ni[1:, cell_index, :].T*np.arange(1, max_levels + 1)
+        Z_bar = np.sum(ni[1:, cell_index, :].T*np.arange(1, max_levels + 1)/4.3e20, axis=1)
         x_label = "Time [ns]"
         legend_unit = " cm"
     
     plt.plot(x_variable, Z_bar, label=str(np.round(independent_variable, 2)) + legend_unit)
     plt.xlabel(x_label)
-    plt.ylabel("$\bar{Z}")
+    plt.ylabel("$\\bar{Z}$")
 
 def plot_electron_temperature(Te, cell_edges, independent_variable, *varargs):
     type = len(varargs)
@@ -80,7 +77,7 @@ def plot_electron_temperature(Te, cell_edges, independent_variable, *varargs):
     plt.ylabel("Material Temperature [keV]")
 
 cell_edges = np.zeros((num_cells + 1, ))
-cell_edges[1] = 5e-6
+cell_edges[1] = 5e-4
 for i in range(num_cells - 1):
     cell_edges[i + 2] = cell_edges[i + 1]*1.07
 
@@ -94,16 +91,17 @@ ni[0, :] = n0
 J0 = np.zeros((num_groups, ))
 J = np.zeros((num_cells, num_groups))
 energy_group_bounds = np.linspace(0.001, 5.000, num_groups + 1)
-energy_group_centers = energy_group_bounds[0:-1] + np.diff(energy_group_bounds)/2
+energy_group_widths = np.diff(energy_group_bounds)
+energy_group_centers = energy_group_bounds[0:-1] + energy_group_widths/2
 
 for i in range(num_groups):
-    J0[i] = xsf.integrate_planck_in_energy(energy_group_bounds[i], energy_group_bounds[i + 1], Tr0)
+    J0[i] = xsf.integrate_planck_in_number(energy_group_bounds[i], energy_group_bounds[i + 1], Tr0)
 
 print(sum(J0))
-print(a*c*Tr0**4/(4*np.pi)*GJ2keV)
+print(4*Tr0**3/(Constants.h**3*Constants.c**2)*Constants.zeta3)
 
 t = 0
-Tm = Tm0
+Tm = Tm0.copy()
 ne_old = np.matmul(ni[1:, :].T, np.arange(1, levels + 1))
 ne = ne_old.copy()
 while t < t_max:
@@ -114,36 +112,37 @@ while t < t_max:
 
     Gamma = np.zeros((num_cells, num_groups, levels))
     for i in range(num_cells):
-        tau = 0
         for j in range(num_groups):
+            tau = 0
             for k in range(levels):
                 Gamma[i, j, k] = ni[k, i]*mat.pi_n(energy_group_centers[j], k)
                 tau += Gamma[i, j, k]*cell_widths[i]
 
-        if i == 0:
-            J[i, :] = J0*np.exp(-tau)
-        else:
-            J[i, :] = J[i - 1, :]*np.exp(-tau)
+            if i == 0:
+                J[i, j] = J0[j]*np.exp(-tau)
+            else:
+                J[i, j] = J[i - 1, j]*np.exp(-tau)
 
     dni = np.zeros((levels + 1, num_cells))
-    dni[0, :] = ne*mat.rr_n(Tm, 1)*ni[1, :] - np.sum(Gamma[:, :, 0], axis=1)
+    dni[0, :] = dt*(ne*mat.rr_n(Tm, 1)*ni[1, :] - np.sum(Gamma[:, :, 0]*J, axis=1))
     for level in range(1, levels):
-        dni[level, :] = np.sum(Gamma[:, :, level - 1], axis=1) - ne*mat.rr_n(Tm, level)*ni[level, :] - np.sum(Gamma[:, :, level], axis=1) + ne*mat.rr_n(Tm, level + 1)*ni[level + 1, :]
+        dni[level, :] = dt*(np.sum(Gamma[:, :, level - 1]*J, axis=1) - ne*mat.rr_n(Tm, level)*ni[level, :] - np.sum(Gamma[:, :, level]*J, axis=1) + ne*mat.rr_n(Tm, level + 1)*ni[level + 1, :])
 
-    dni[levels, :] = np.sum(Gamma[:, :, levels - 1], axis=1) - ne*mat.rr_n(Tm, levels)*ni[levels, :]
+    dni[levels, :] = dt*(np.sum(Gamma[:, :, levels - 1]*J, axis=1) - ne*mat.rr_n(Tm, levels)*ni[levels, :])
 
     ni += dni
 
     # Update temperature
-    dEabs = np.zeros((num_cells))
-    for group in range(len(energy_group_centers)):
-        dEabs += np.sum(np.squeeze(Gamma[:, group, :])*np.arange(levels))*J[:, group]
+    dEabs = np.zeros((num_cells, ))
+    for group, energy in enumerate(energy_group_centers):
+        for level in range(levels):
+            dEabs += ni[level, :]*mat.pi_n(energy, level)*level*J[:, group]*energy_group_widths[group]
 
     dEabs *= dt
 
     dEint = np.zeros((num_cells, ))
     for level in range(levels):
-        dEint += dni[level, :]*mat.Eth[level]
+        dEint += dni[level + 1, :]*mat.Eth[level]
 
     dEint *= dt
 
@@ -156,7 +155,9 @@ while t < t_max:
     for level in range(1, levels):
         dErr += ne*ni[level, :]*mat.rr_n(Tm, level)*(1.5*Tm + mat.Eth[level - 1])
 
-    Tm += 2/(3*np.sum(ni, axis=0) + ne)*(dEabs - dEint - dErr - 1.5*Tm*dne)
+    dErr *= dt
+
+    Tm += (dEabs - dEint - dErr - 1.5*Tm*dne)/(xsf.cv(Tm, np.sum(ni, axis=0) + ne))
 
     t += dt
 

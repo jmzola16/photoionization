@@ -18,6 +18,10 @@ from numba.experimental import jitclass
 from numba.typed import List
 from numba import int64, float64, typeof, jit
 
+from Particle import Particle
+from Mesh import Mesh
+import Constants
+
 # Physical constants
 a = 0.01372                         # Source spectrum [GJ/(cm^3*keV^4)]
 c = 30                              # Speed of light [cm/ns]
@@ -56,59 +60,7 @@ N_recomb = np.zeros((M, levels - 1)) # The number of particles to source from ea
 # cv = 741/(keV2J*k_B)*(n/(Na)*rho_N)  # Material specific heat [keV/(keV*cm^3)]
 #Sigma = np.ones((M, ))*n*sigma_a    # Macroscopic photoionization cross-section
 
-emission_rate = dt*4*np.pi*sigma_SB*Ts**4/(keV2GJ)  # Specific intensity of photons emitted [keV/(cm^2)]
-
-spec = [
-    ('x', float64),
-    ('mu', float64),
-    ('nu', float64),
-    ('w', float64),
-    ('cell', int64),
-    ('timestep_dist', float64),
-]
-
-#@jitclass(spec)
-class Particle:
-    def __init__(self, x, mu, nu, w, cell, timestep_dist):
-        self.x = x
-        self.mu = mu
-        self.w = w
-        self.nu = nu
-        self.cell = cell
-        self.timestep_dist = timestep_dist
-        
-    def move(self, bounds, particle_tally):
-        # Move a particle along its direction vector
-        path_length = (bounds[1] - self.x)/self.mu*(self.mu > 0) + (self.x - bounds[0])/self.mu*(self.mu < 0)
-        if abs(path_length) < self.timestep_dist:
-            # If the particle can reach the border of the cell within the current time step, increment its cell
-            self.x += path_length*(abs(self.mu))
-            self.timestep_dist -= abs(path_length)
-            particle_tally[self.cell] -= 1
-            self.cell += int(np.sign(self.mu))
-            if self.cell < M and self.cell >= 0:
-                particle_tally[self.cell] += 1
-        else:
-            # Else move the particle within the cell
-            path_length = self.timestep_dist
-            self.x += self.timestep_dist*self.mu
-            self.timestep_dist = 0.0
-            
-        # Return the distance travelled and updated particle tally
-        return abs(path_length), particle_tally
-            
-    def reduce_weight(self, path_length, Sigma):
-        # Reduce the particle length by the path length traveled
-        self.w *= np.exp(-Sigma*path_length)
-
-    def copy(self):
-        # Return a deep copy of a particle object, for use in copying the census list
-        copied_particle = Particle(self.x, self.mu, self.nu, self.w, self.cell, self.timestep_dist)
-        return copied_particle
-    
-    def roulette(self, roulette_pool, particle_tally):
-        h = 4.135e-9
-        self.w += roulette_pool[self.cell]/(particle_tally[self.cell]*h*self.nu) # TODO: Should be number of particles in cell
+emission_rate = dt*sigma_SB*Ts**4/(keV2GJ)  # Specific intensity of photons emitted [keV/(cm^2)]
 
 @jit
 def source_particles(census, particle_tally, rng, dt, source_loc, w0, number, **kwargs):
