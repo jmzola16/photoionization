@@ -13,7 +13,7 @@ spec = [
     ('timestep_dist', float64),
 ]
 
-@jitclass(spec)
+#@jitclass(spec)
 class Particle:
     def __init__(self, x, mu, nu, w, cell, timestep_dist):
         self.x = x
@@ -50,4 +50,4 @@ class Particle:
         return copied_particle
     
     def roulette(self, roulette_pool, particle_tally):
-        self.w += roulette_pool[self.cell]/(particle_tally[self.cell]*Constants.h*self.nu) # TODO: Should be number of particles in cell
+        self.w += roulette_pool[self.cell]/(particle_tally[self.cell]*Constants.h*self.nu)

@@ -14,9 +14,15 @@ t_max = 1
 Ts = 0.100
 Tm0 = np.ones((num_cells, ))*1e-5
 Tr0 = 0.1
+max_it = 1000
+use_max_it = True
+tot_recomb = np.zeros((num_cells, 100))
 plot_interval = 0.2
 plot_time = 0.2
 mat = xsf.Nitrogen()
+dEpi_vec = []
+dErr_vec = []
+dEint_vec = []
 
 # Plotting function definitions
 # Figure codes: 10 - average ionization levels in medium at separate times
@@ -95,12 +101,13 @@ energy_group_widths = np.diff(energy_group_bounds)
 energy_group_centers = energy_group_bounds[0:-1] + energy_group_widths/2
 
 for i in range(num_groups):
-    J0[i] = xsf.integrate_planck_in_number(energy_group_bounds[i], energy_group_bounds[i + 1], Tr0)
+    J0[i] = 4*np.pi*xsf.integrate_planck_in_number(energy_group_bounds[i], energy_group_bounds[i + 1], Tr0)
 
 print(sum(J0))
-print(4*Tr0**3/(Constants.h**3*Constants.c**2)*Constants.zeta3)
+print(16*np.pi*Tr0**3/(Constants.h**3*Constants.c**2)*Constants.zeta3)
 
 t = 0
+it = 0
 Tm = Tm0.copy()
 ne_old = np.matmul(ni[1:, :].T, np.arange(1, levels + 1))
 ne = ne_old.copy()
@@ -109,6 +116,9 @@ while t < t_max:
         plot_average_ionization_level(ni, cell_edges, 7, t)
         plot_electron_temperature(Tm, cell_edges, t)
         plot_time += plot_interval
+
+    if use_max_it and it >= max_it:
+        break
 
     Gamma = np.zeros((num_cells, num_groups, levels))
     for i in range(num_cells):
@@ -125,18 +135,22 @@ while t < t_max:
 
     dni = np.zeros((levels + 1, num_cells))
     dni[0, :] = dt*(ne*mat.rr_n(Tm, 1)*ni[1, :] - np.sum(Gamma[:, :, 0]*J, axis=1))
+    #tot_recomb[:, int(it/10)] += dt*ne*mat.rr_n(Tm, 1)*ni[1, :]
     for level in range(1, levels):
         dni[level, :] = dt*(np.sum(Gamma[:, :, level - 1]*J, axis=1) - ne*mat.rr_n(Tm, level)*ni[level, :] - np.sum(Gamma[:, :, level]*J, axis=1) + ne*mat.rr_n(Tm, level + 1)*ni[level + 1, :])
+    #    tot_recomb[:, int(it/10)] += dt*ne*mat.rr_n(Tm, level + 1)*ni[level + 1, :]
 
     dni[levels, :] = dt*(np.sum(Gamma[:, :, levels - 1]*J, axis=1) - ne*mat.rr_n(Tm, levels)*ni[levels, :])
 
     ni += dni
 
+    assert np.all(ni >= 0)
+
     # Update temperature
     dEabs = np.zeros((num_cells, ))
     for group, energy in enumerate(energy_group_centers):
         for level in range(levels):
-            dEabs += ni[level, :]*mat.pi_n(energy, level)*level*J[:, group]*energy_group_widths[group]
+            dEabs += ni[level, :]*mat.pi_n(energy, level)*J[:, group]*energy_group_widths[group]
 
     dEabs *= dt
 
@@ -146,7 +160,7 @@ while t < t_max:
 
     dEint *= dt
 
-    ne = np.matmul(ni[1:, :].T, np.arange(1, levels + 1))
+    ne = np.matmul(ni.T, np.arange(levels + 1))
     dne = ne - ne_old
 
     ne_old = ne.copy()
@@ -157,14 +171,41 @@ while t < t_max:
 
     dErr *= dt
 
-    Tm += (dEabs - dEint - dErr - 1.5*Tm*dne)/(xsf.cv(Tm, np.sum(ni, axis=0) + ne))
+    #dEsp = np.zeros((num_cells, ))
+    #for cell in range(num_cells):
+    #   dEsp[cell] = mat.E_spectral(Tm[cell], ni[:, cell])
+
+    #dEsp *= dt
+
+    Tm += (dEabs - dEint - dErr - 1.5*Tm*dne)/(xsf.cv(Tm, 4.3e20 + ne))
+
+    dEpi_vec.append(dEabs[0])
+    dEint_vec.append(dEint[0])
+    dErr_vec.append(dErr[0])
 
     t += dt
+    it += 1 
+
+#file = '../Data/Salzmann_Recombination.txt'
+#f = open(file, 'w')
+
+#f.write("Recombination in first 100 time steps: \n")
+#for i in range(100):
+#    for j in range(num_cells):
+#        f.write('{:e}, '.format(tot_recomb[j, i]))
+#    f.write('\n')
 
 plot_average_ionization_level(ni, cell_edges, 7, t)
 plot_electron_temperature(Tm, cell_edges, t)
 plt.figure(10)
 plt.legend()
 plt.figure(20)
+plt.legend()
+plt.show()
+
+time = np.linspace(0, t_max, len(dEpi_vec))
+plt.plot(time, dEpi_vec, label="$dE_{pi}$")
+plt.plot(time, dEint_vec, label="$dE_{int}$")
+plt.plot(time, dErr_vec, label="$dE_{rr}$")
 plt.legend()
 plt.show()
