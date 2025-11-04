@@ -24,19 +24,30 @@ from Mesh import Mesh
 import Constants
 
 # Problem setup
-N_max = 10000                      # Maximum number of particles for Russian Roulette
+N_max = 10000                     # Maximum number of particles for Russian Roulette
 N_source = 1000                    # Number of particles sourced per iteration
 N_recomb_tot = 10                  # Number of particles from recombination per cell
 M = 100                             # Number of cells
 edges = np.linspace(0, 0.7, M + 1)  # Cell edge location [cm]
 flux = np.zeros((M, ))              # Scalar flux in each cell
-t_max = 1                           # Maximum time
-dt = 0.001                         # Time step [ns]
-Ts = 0.1                            # Source temperature [keV]
+t_max = 3                           # Maximum time
+dt = 1e-3                         # Time step [ns]
+Ts = 0.1                           # Peak Source temperature [keV]
+# Source temperature function [keV]
+def Ts_Salzmann(t):
+    return Ts
+
+def Ts_Gray(t):
+    t_peak = 1
+    
+    if t < t_peak:
+        return (t/t_peak)*Ts
+    else:
+        return Ts
 n = 4.3e20                            # Number density of particles in medium [particles/cm^3]
 use_num_time_steps = False               # Use a number of time steps instead of a max time
-plot_time = 0.2
-plot_interval = 0.2
+plot_time = 0.5
+plot_interval = 0.5
 
 # Define material 
 mat = xsf.Nitrogen()
@@ -44,9 +55,8 @@ mat = xsf.Nitrogen()
 levels = mat.Z + 1             # Number of ionization levels
 # cv = 741/(keV2J*k_B)*(n/(Na)*rho_N)  # Material specific heat [keV/(keV*cm^3)]
 # Sigma = np.ones((M, ))*n*sigma_a    # Macroscopic photoionization cross-section
-
-emission_rate = dt*2*np.pi*Constants.sigma_SB*Ts**4/(Constants.keV2GJ)  # Specific intensity of photons emitted [keV/(cm^2)]
-tol = 1e-4*np.array([n, emission_rate/(dt*2.71*Ts), Ts])                          # Tolerance for iterative solver
+peak_emission_rate = dt*2*np.pi*Constants.sigma_SB*Ts**4/(Constants.keV2GJ)
+tol = 1e-4*np.array([n, peak_emission_rate/(dt*2.71*Ts), Ts])                          # Tolerance for iterative solver
 
 # Timing/profiling variables
 moving_particles = [0.0, 0]
@@ -63,24 +73,29 @@ dErr_vec = []
 dEpi_vec = []
 
 #@jit
-def source_particles(rng, census, mesh, dt, source_loc, w0, N_source, Ts):   
+def source_particles(rng, census, mesh, dt, source_loc, N_source, Ts, t):
+
+    emission_rate = dt*2*np.pi*Constants.sigma_SB*Ts(t)**4/(Constants.keV2GJ)  # Specific intensity of photons emitted [keV/(cm^2)]
+    w0 = emission_rate/N_source
+    cutoff = 1e-10*w0
     for i in range(N_source):
         # For each particle to source, parameters
         start_time = dt*rng.random()
         xi = rng.random(5)
         mu = np.sqrt(rng.random())
-        nu = xsf.sample_blackbody(Ts, xi)
+        nu = xsf.sample_blackbody(Ts(t), xi)
+        #nu = Ts/Constants.h
             
         timestep_dist = Constants.c*dt
         
-        photon = Particle(edges[source_loc], mu, nu, w0/(Constants.h*nu), source_loc, (dt - start_time)/dt*timestep_dist)
+        photon = Particle(mesh.cell_edges[source_loc], mu, nu, w0/(Constants.h*nu), source_loc, (dt - start_time)/dt*timestep_dist)
         census.append(photon)
 
         mesh.particle_tally[source_loc] += 1
         
-    return census, mesh
+    return census, mesh, cutoff
 
-def advance_particles(census, mesh, *varargs):
+def advance_particles(census, cutoff, mesh, *varargs):
     if len(varargs) > 0:
         old_mesh = varargs[0]
     else:
@@ -129,12 +144,18 @@ def advance_particles(census, mesh, *varargs):
 
     return census, mesh
 
-def iterative_solver(census, mesh, tol, max_it, seed):
+def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
     # Define error metrics and max iterations
     it = 0
     err = np.ones((3, ))*n
     err_per_it = np.zeros((3, max_it))
+    Z_bar_five_it = np.zeros((mesh.N_cells, 5))
+    flux_five_it = np.zeros((mesh.N_cells, 5))
+    T_five_it = np.zeros((mesh.N_cells, 5))
     
+    #rng = np.random.default_rng(seed)
+    #census = mesh.source_particles_recombination(rng, census, dt)
+
     # Copy the initial population which can be reused in each iteration
     #population = List()
     population = []
@@ -144,9 +165,8 @@ def iterative_solver(census, mesh, tol, max_it, seed):
 
     # Hold data from previous iterations as convergence criteria
     old_mesh = mesh.copy()
-    ni_previt = mesh.ni.copy()
-    flux_previt = mesh.flux.copy()
-    Te_previt = mesh.Te.copy()
+    mesh_previt = mesh.copy()
+    mesh_previt.reset_iteration()
 
     while (np.any(abs(err) > tol) and it < max_it):
         time1_it = time.time()
@@ -170,24 +190,28 @@ def iterative_solver(census, mesh, tol, max_it, seed):
         sourcing_particles_recomb[0] += time2_recomb - time1_recomb
         sourcing_particles_recomb[1] += 1
 
-        census, mesh = advance_particles(census, mesh, old_mesh)
-        
+        census, mesh = advance_particles(census, cutoff, mesh, old_mesh)
+
         # Calculate the update to ionization level and associated error
-        mesh.update_state(old_mesh, dt)     # TODO: May be unnecessary. Update dni/dT in place?
+        mesh.update_state(old_mesh, mesh_previt, dt, lam=(1 + 0*(it == 0)))     # TODO: May be unnecessary. Update dni/dT in place?
         
-        err[0] = np.linalg.norm(mesh.ni - ni_previt)
+        err[0] = np.linalg.norm(mesh.ni - mesh_previt.ni)
         err_per_it[0, it] = err[0]
-        ni_previt = mesh.ni[:]
         
         # Calculate the error from flux
-        err[1] = np.linalg.norm(mesh.flux - flux_previt)
+        err[1] = np.linalg.norm(mesh.flux - mesh_previt.flux)
         err_per_it[1, it] = err[1]
-        flux_previt = mesh.flux[:]
         
         # Calculate error from material temperature and update
-        err[2] = np.linalg.norm(mesh.Te - Te_previt)
+        err[2] = np.linalg.norm(mesh.Te - mesh_previt.Te)
         err_per_it[2, it] = err[2]
-        Te_previt[:] = mesh.Te[:]
+
+        mesh_previt = mesh.copy()
+
+        if it < 5:
+            Z_bar_five_it[:, it] = np.matmul(mesh.ni, np.arange(mesh.N_levels + 1))/mesh.atom_density
+            flux_five_it[:, it] = mesh.flux.copy()
+            T_five_it[:, it] = mesh.Te.copy()
         
         it += 1
 
@@ -196,46 +220,42 @@ def iterative_solver(census, mesh, tol, max_it, seed):
         per_iteration[1] += 1
 
     if it == max_it:
-        title = ['Ni err', 'Flux err', 'T err']
-        for i in range(3):
-            plt.figure(50 + i)
-            plt.plot(np.arange(max_it), err_per_it[i, :], label='t=' + str(dt*t))
-            plt.title(title[i])
-            plt.xlabel("N iterations")
-            plt.ylabel("Err")
+        print("Max iterations reached at t={0}".format(t))
+        print("Ni rel err: {:g}".format(err[0]/tol[0]))
+        print("Flux rel err: {:g}".format(err[1]/tol[1]))
+        print("T rel err {:g} \n".format(err[2]/tol[2]))
+
+#        for i in range(3):
+#            plt.figure(50 + i)
+#            plt.subplot(2, 1, 2)
+#            plt.semilogy(np.arange(max_it), err_per_it[i, :], label='t=' + str(dt*t))
+#            plt.xlabel("N iterations")
+#            plt.ylabel("Err")
+#
+#        for i in range(5):
+#            plt.figure(51)
+#            plt.subplot(2, 1, 1)
+#            plt.plot(mesh.cell_centers, flux_five_it[:, i], label=str(i))
+#            plt.title('Flux')
+#            plt.figure(52)
+#            plt.subplot(2, 1, 1)
+#            plt.plot(mesh.cell_centers, T_five_it[:, i], label=str(i))
+#            plt.title('Temperature')
+#            plt.figure(50)
+#            plt.subplot(2, 1, 1)
+#            plt.plot(mesh.cell_centers, Z_bar_five_it[:, i], label=str(i))
+#            plt.title(r'$\overline{Z}$')
+#        
+#        plt.figure(50)
+#        plt.legend()
+#        plt.figure(51)
+#        plt.legend()
+#        plt.figure(52)
+#        plt.legend()
+#        plt.show()
             
 
     return census, mesh
-
-# def plot_ionization_level(edges, ni, n, t):
-#     z_loc = edges[:-1] + np.diff(edges)
-#     plt.plot(z_loc, ni/n)
-#     plt.xlabel('z-location [cm]')
-#     plt.ylabel('Ion fraction')
-#     plt.legend(['n'+ str(i) for i in range(levels)])
-#     plt.title('Ion fraction at t='+ str(np.round(t, 2)) + ' ns')
-#     plt.show()
-
-# def plot_average_ionization_level(edges, ni, n, t):
-#     plt.figure(1)
-#     z_loc = edges[:-1] + np.diff(edges)
-#     z_bar = np.zeros((len(z_loc), ))
-#     for i in range(levels):
-#         z_bar += i*ni[:, i]/n
-#     plt.plot(z_loc, z_bar, label='t='+str(np.round(t, 2)))
-#     plt.xlabel('z-location [cm]')
-#     plt.ylabel(r'$ \overline{Z} $')
-    
-# def temperature_plots(edges, energy_density, T, t):
-#     plt.figure(11)
-#     plt.subplot(2, 1, 2)
-#     z_loc = edges[:-1] + np.diff(edges)
-#     plt.plot(z_loc, T, label='t='+str(np.round(t, 2)))
-#     plt.xlabel('z-location [cm]')
-#     plt.ylabel('Material temperature [keV]')
-#     plt.subplot(2, 1, 1)
-#     plt.plot(z_loc, (energy_density*Constants.keV2GJ/Constants.a)**0.25, label='t='+str(np.round(t, 2)))
-#     plt.ylabel('Radiation temperature [keV]')
     
 def two_state_plots(edges, ni, n, energy_density, t):
     plt.subplot(2, 1, 2)
@@ -246,41 +266,6 @@ def two_state_plots(edges, ni, n, energy_density, t):
     plt.subplot(2, 1, 1)
     plt.plot(z_loc, energy_density, t)
     plt.ylabel('Rad. Energy Density [keV/cm$^3$]')
-
-#def alpha_plot(edges, alpha, t):
-#    plt.figure(20 + int(t/(1e-3)))
-#    z_loc = edges[:-1] + np.diff(edges)
-#    plt.plot(z_loc, alpha)
-#    plt.title(r'$ \alpha $ at t=' + str(round(t, 2)))
-#    plt.xlabel('z-location [cm]')
-#    plt.ylabel(r'$ \alpha $ [-]')
-#    plt.legend(['n' + str(i) for i in range(levels)])
-#
-#def write_data(file, t, energy_density, T, ni):
-#    f = open(file, 'a')
-#    f.write('{:4.2g}'.format(t))
-#    f.write('\n\n')
-#    form = ''
-#    for i in range(M):
-#        form += '{:e}, '.format(energy_density[i])
-#    f.write(form)
-#    f.write('\n\n')
-#
-#    form = ''
-#    for i in range(M):
-#        form += '{:e}, '.format(T[i])
-#    f.write(form)
-#    f.write('\n\n')
-#
-#    for i in range(M):
-#        form = ''
-#        for j in range(levels):
-#            form += '{:e}, '.format(ni[i, j])
-#
-#        f.write(form + '\n')
-#    
-#    f.write('\n')
-#    f.close()
 
 # Create particle census
 type_photon = Particle(0.1, 0.5, 800.0, 1.0, 0, 0.0)
@@ -316,20 +301,22 @@ for t in range(steps):
     
     # Boundary source information
     source_loc = int(0)
-    w0 = emission_rate/N_source
     timestep_dist = Constants.c*dt
-    cutoff = 1e-10*w0
 
     # Source particles from boundary condition for each time step
     time1 = time.time()
-    census, mesh = source_particles(rng, census, mesh, dt, source_loc, w0, N_source, Ts)
+    census, mesh, cutoff = source_particles(rng, census, mesh, dt, source_loc, N_source, Ts_Gray, (t + 1)*dt)
     time2 = time.time()
     sourcing_particles_boundary[0] += time2 - time1
     sourcing_particles_boundary[1] += 1
 
+    if t == 0:
+        mesh.plot_radiation_spectrum(census, 0.0035, 0)
+        plt.show()
+
     # Invoke iterative solver to converge ni, T
     time1 = time.time()
-    census, mesh = iterative_solver(census, mesh, tol, 100, t)
+    census, mesh = iterative_solver(census, cutoff, mesh, tol, 100, t)
     time2 = time.time()
     per_time_step[0] += time2 - time1
     per_time_step[1] += 1
@@ -350,6 +337,12 @@ for t in range(steps):
 
     if kill_prob < 1:
         index = 0
+
+        rad_energy_per_cell_bfr = np.zeros((M, ))
+        rad_energy_per_cell_aft = np.zeros((M, ))
+        for particle in census:
+            rad_energy_per_cell_bfr[particle.cell] += particle.w*Constants.h*particle.nu
+
         while index < len(census):
             if rng.random() > kill_prob and mesh.particle_tally[census[index].cell] > 1:
                 dead_particle = census.pop(index)
@@ -360,55 +353,23 @@ for t in range(steps):
 
         for particle in census:
             particle.roulette(roulette_pool, mesh.particle_tally)
+            rad_energy_per_cell_aft[particle.cell] += particle.w*Constants.h*particle.nu
 
     roulette_pool = np.zeros((M, ))
     time2 = time.time()
     russian_roulette[0] += time2 - time1
     russian_roulette[1] += 1
 
-    if t*dt > plot_time:
+    if t*dt >= plot_time:
         mesh.plot_temperatures(t*dt)
         mesh.plot_average_ionization_level(t*dt)
+        mesh.plot_radiation_spectrum(census, 0.0035, t*dt)
+        mesh.plot_radiation_spectrum(census, 0.2, t*dt)
+        mesh.plot_radiation_spectrum(census, 0.35, t*dt)
         mesh.plot_alpha(t*dt)
         mesh.write_data(file, t*dt)
         print(t*dt)
         plot_time += plot_interval
-
-#     if t == 100:
-#         # two_state_plots(edges, ni, n, energy_density, t*dt)
-#         # ADD CONSISTANT FIGURE/AXIS NUMBER FOR PLOTS
-#         temperature_plots(edges, mesh.energy_density, mesh.Te, t*dt)
-#         plot_average_ionization_level(edges, mesh.ni, n, t*dt)
-#         alpha_plot(edges, mesh.alpha(), t*dt)
-#         write_data(file, np.round(t*dt, 2), mesh.energy_density, mesh.Te, mesh.ni)
-#         print(t*dt)
-#     elif t == 450:
-#         # two_state_plots(edges, ni, n, energy_density, t*dt)
-#         temperature_plots(edges, mesh.energy_density, mesh.Te, t*dt)
-#         plot_average_ionization_level(edges, mesh.ni, n, t)
-#         alpha_plot(edges, mesh.alpha(), t*dt)
-#         write_data(file, np.round(t*dt, 2), mesh.energy_density, mesh.Te, mesh.ni)
-#         print(t*dt)
-#     elif t == 750:
-#         # two_state_plots(edges, ni, n, energy_density, t*dt)
-#         temperature_plots(edges, mesh.energy_density, mesh.Te, t*dt)
-#         plot_average_ionization_level(edges, mesh.ni, n, t)
-#         alpha_plot(edges, mesh.alpha(), t*dt)
-#         write_data(file, np.round(t*dt, 2), mesh.energy_density, mesh.Te, mesh.ni)
-#         print(t*dt)
-#     elif t == 1000:
-#         # two_state_plots(edges, ni, n, energy_density, t*dt)
-#         temperature_plots(edges, mesh.energy_density, mesh.Te, t*dt)
-#         plot_average_ionization_level(edges, mesh.ni, n, t)
-#         alpha_plot(edges, mesh.alpha(), t*dt)
-#         write_data(file, np.round(t*dt, 2), mesh.energy_density, mesh.Te, mesh.ni)
-#         print(t*dt)
-#     elif t == 2000:
-#         # two_state_plots(edges, ni, n, energy_density, t*dt)
-#         temperature_plots(edges, mesh.energy_density, mesh.Te, t*dt)
-#         plot_average_ionization_level(edges, mesh.ni, n, t)
-#         write_data(file, np.round(t*dt, 2), mesh.energy_density, mesh.Te, mesh.ni)
-#         print(t*dt)
 
 # two_state_plots(edges, ni, n, energy_density, t_max*dt)
 plt.figure(11)

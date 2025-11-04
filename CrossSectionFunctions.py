@@ -29,32 +29,25 @@ def blackbody(nu_list, T):
         The energy density in [keV/cm^2] of photons of energy h*nu for a blackbody 
         emitter at temperature T
     """
-    h = 4.135e-9     # Planck's constant [keV-ns]
-    c = 30.0         # Speed of light [cm/ns]
 
     if hasattr(nu_list, "__len__"):
         e = np.zeros((len(nu_list), ))
 
         for i, nu in enumerate(nu_list):
-            if h*nu/T > 600:
+            if Constants.h*nu/T > 600:
                 e[i] = 0.0
             else:
-                e[i] = 2*h*nu**3/(c**2)*(np.exp(h*nu/T) - 1)**-1     # Intensity [keV/cm^2]
+                e[i] = 2*Constants.h*nu**3/(Constants.c**2)*(np.exp(Constants.h*nu/T) - 1)**-1     # Intensity [keV/cm^2]
     else:
-        if h*nu_list/T > 600:
+        if Constants.h*nu_list/T > 600:
             e = np.array([0.0])
         else:
-            e = np.array([2*h*nu_list**3/(c**2)*(np.exp(h*nu_list/T) - 1)**-1])
+            e = np.array([2*Constants.h*nu_list**3/(Constants.c**2)*(np.exp(Constants.h*nu_list/T) - 1)**-1])
 
     return e
 
 #@jit
 def sample_blackbody(T, xi):
-    a = 0.01372         # Source spectrum [GJ/(cm^3*keV^4)]
-    c = 30              # Speed of light [cm/ns]
-    keV2GJ = 1.602e-25  # Conversion factor for keV to GJ
-    h = 4.135e-9        # Planck's constant [keV-ns]
-    
     n = 1.0
     const = np.pi**4/90*xi[0]
     comp = 1.0
@@ -63,7 +56,7 @@ def sample_blackbody(T, xi):
         n += 1.0
         comp += 1/n**4
 
-    return -1/n*np.log(np.prod(xi[1:]))*T/h
+    return -1/n*np.log(np.prod(xi[1:]))*T/Constants.h
 
     #nu0 = 2.71*T/h
     #sol = scipy.optimize.root(lambda nu : 4*np.pi*scipy.integrate.quad(lambda nu_prime : blackbody(nu_prime, T), 1e6, nu)[0] - (a*c*T**4/keV2GJ)*xi, nu0, jac=lambda nu : 4*np.pi*blackbody(nu, T))
@@ -273,7 +266,7 @@ class Nitrogen():
     
     def pi_n7(self, E):
         # Input - energy in keV
-        E0 = 21.8e-3
+        E0 = 21.08e-3
         sigma0 = 1.117e3
         ya = 32.88
         P = 2.693
@@ -299,71 +292,64 @@ class Nitrogen():
         return is2ins*A/(np.sqrt(T/T0)*(1 + np.sqrt(T/T0))**(1 - B)*(1 + np.sqrt(T/T1))**(1 + B))
 
     def rr_n1(self, T):
-        k = 8.6133e-8 # Boltzmann constant in keV/K
         A = 6.387e-10
         B = 0.7308
-        T0 = 9.467e-2*k
-        T1 = 2.954e6*k
+        T0 = 9.467e-2*Constants.k_B
+        T1 = 2.954e6*Constants.k_B
         C = 0.2440
-        T2 = 6.739e4*k
+        T2 = 6.739e4*Constants.k_B
     
         return self.rrxs_fitequation(A, B, T0, T1, T, C=C, T2=T2)
     
     def rr_n2(self, T):
-        k = 8.6133e-8 # Boltzmann constant in keV/K
         A = 2.410e-9
         B = 0.7948
-        T0 = 0.1231*k
-        T1 = 3.016e6*k
+        T0 = 0.1231*Constants.k_B
+        T1 = 3.016e6*Constants.k_B
         C = 0.0774
-        T2 = 1.106e5*k
+        T2 = 1.106e5*Constants.k_B
     
         return self.rrxs_fitequation(A, B, T0, T1, T, C=C, T2=T2)
 
     def rr_n3(self, T):
-        k = 8.6133e-8 # Boltzmann constant in keV/K
         A = 7.923e-10
         B = 0.7768
-        T0 = 3.750*k
-        T1 = 3.468e6*k
+        T0 = 3.750*Constants.k_B
+        T1 = 3.468e6*Constants.k_B
         C = 0.0223
-        T2 = 7.206e4
+        T2 = 7.206e4*Constants.k_B
     
         return self.rrxs_fitequation(A, B, T0, T1, T, C=C, T2=T2)
 
     def rr_n4(self, T):
-        k = 8.6133e-8 # Boltzmann constant in keV/K
         A = 1.553e-10
         B = 0.6682
-        T0 = 1.823e2*k
-        T1 = 7.751e6*k
+        T0 = 1.823e2*Constants.k_B
+        T1 = 7.751e6*Constants.k_B
     
         return self.rrxs_fitequation(A, B, T0, T1, T)
     
     def rr_n5(self, T):
-        k = 8.6133e-8 # Boltzmann constant in keV/K
         A = 6.245e-11
         B = 0.4985
-        T0 = 1.957e3*k
-        T1 = 2.177e7*k
+        T0 = 1.957e3*Constants.k_B
+        T1 = 2.177e7*Constants.k_B
     
         return self.rrxs_fitequation(A, B, T0, T1, T)
     
     def rr_n6(self, T):
-        k = 8.6133e-8 # Boltzmann constant in keV/K
         A = 2.388e-10
         B = 0.6732
-        T0 = 53.960e2*k
-        T1 = 3.583e7*k
+        T0 = 3.960e2*Constants.k_B
+        T1 = 3.583e7*Constants.k_B
     
         return self.rrxs_fitequation(A, B, T0, T1, T)
     
     def rr_n7(self, T):
-        k = 8.6133e-8 # Boltzmann constant in keV/K
         A = 6.170e-10
-        B = 0.7470
-        T0 = 1.951e2*k
-        T1 = 4.483e7*k
+        B = 0.7481
+        T0 = 1.316e2*Constants.k_B
+        T1 = 3.427e7*Constants.k_B
     
         return self.rrxs_fitequation(A, B, T0, T1, T)
 
@@ -465,16 +451,14 @@ def cv(T, rho):
 #a = 0.01372
 #c = 30.0
 #keV2GJ = 1.602e-25
-#T = 1.0
+#T = 0.1
 #h = 4.135e-9
 #bins = np.linspace(0, 5e9, 10000)
 #bin_centers = bins[:-1] + np.diff(bins)
 #bin_widths = np.diff(bins)
 #heights = np.zeros((len(bin_centers), ))
 #rng = np.random.default_rng()
-
 #analytic = blackbody(bin_centers, T)/(a*c*T**4/(4*np.pi*keV2GJ))
-
 #for i in range(N):
 #    nu = sample_blackbody(T, rng.random(5))
 #    if nu > bins[-1]:
@@ -482,8 +466,39 @@ def cv(T, rho):
 #    else:
 #        index = np.searchsorted(bins, nu) - 1
 #    heights[index] += 1/(bin_widths[index]*N)
+#plt.bar(bin_centers*Constants.h, heights, bin_widths[0]*Constants.h, align='center')
+#plt.plot(bin_centers*Constants.h, analytic, 'tab:orange', label='Analytic')
+#plt.legend()
+#plt.show()
 
-#lt.bar(bin_centers, heights, bin_widths[0], align='center')
-#plt.plot(bin_centers, analytic, 'tab:orange', label='Analytic')
+# Plot recombination rates over temperature and photoionization cross-sections over energy
+#M = 1000
+#T_max = 0.1
+#T = np.linspace(1e-5, 0.1, M)
+#mat = Nitrogen()
+#n = 4.3e20
+#E = np.linspace(1e-3, 0.6, M)
+#
+#for level in range(mat.Z):
+#    plt.figure(1)
+#    rr_rate = np.zeros((M, ))
+#    for ind, temp in enumerate(T):
+#        rr_rate[ind] = mat.rr_n(temp, level + 1) #*level*n**2
+#    plt.semilogy(T, rr_rate, label="$RR_{"+str(level + 1)+"->"+str(level)+"}$")
+#    plt.figure(2)
+#    pi_rate = np.zeros((M, ))
+#    for ind, energy in enumerate(E):
+#        pi_rate[ind] = mat.pi_n(energy, level) #*n*blackbody(energy/Constants.h, T_max)[0]/energy
+#    plt.semilogy(E, pi_rate, label="$PI_{"+str(level)+"->"+str(level + 1)+"}$")
+#
+#plt.figure(1)
+#plt.title("Max RR rates over temperature")
+#plt.xlabel("Temperature [keV]")
+#plt.ylabel("RR Rate [$cm^{3} ns^{-1}$]")
+#plt.legend()
+#plt.figure(2)
+#plt.title("Photoionization rate for blackbody spectrum")
+#plt.xlabel("Photon Energy [keV]")
+#plt.ylabel("Photoionization rate [# $cm^{-3} ns^{-1}$]")
 #plt.legend()
 #plt.show()

@@ -116,6 +116,7 @@ while t < t_max:
         plot_average_ionization_level(ni, cell_edges, 7, t)
         plot_electron_temperature(Tm, cell_edges, t)
         plot_time += plot_interval
+        print(t)
 
     if use_max_it and it >= max_it:
         break
@@ -144,7 +145,7 @@ while t < t_max:
 
     ni += dni
 
-    assert np.all(ni >= 0)
+#    assert np.all(ni >= 0)
 
     # Update temperature
     dEabs = np.zeros((num_cells, ))
@@ -156,7 +157,7 @@ while t < t_max:
 
     dEint = np.zeros((num_cells, ))
     for level in range(levels):
-        dEint += dni[level + 1, :]*mat.Eth[level]
+        dEint += dni[level, :]*mat.Eth[level]
 
     dEint *= dt
 

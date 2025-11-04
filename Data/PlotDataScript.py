@@ -10,7 +10,15 @@ import scipy
 
 num_cells = 100
 cell_edges = np.linspace(0, 0.7, num_cells + 1)
-filename = '../Data/MC_Nitrogen_Reemission_1.txt'
+#filename = '../Data/MC_Nitrogen_Reemission_Damped.txt'
+#filename = '../Data/MC_Nitrogen_Reemission_lam=0.2_NoRR.txt'
+#filename = '../Data/MC_Nitrogen_Reemission_lam=0.8_NoRR.txt'
+#filename = '../Data/MC_Nitrogen_Reemission_PrevTimeStepRR.txt'
+#filename = '../Data/MC_Nitrogen_Reemission_OneEnergy.txt'
+#filename = '../Data/MC_Nitrogen_Reemission_LowerEnergyLossRR.txt'
+#filename = '../Data/MC_Nitrogen_Reemission_1e6MaxParticles.txt'
+#filename = '../Data/MC_Nitrogen_Reemission_lam=0.5_LowEnergyPhoton_IterateRR.txt'
+filename = '../Data/MC_Nitrogen_Reemission_11.txt'
 
 file = open(filename, 'r')
 
@@ -76,13 +84,6 @@ plt.xlabel('z-location [cm]')
 plt.ylabel('\\bar{Z}')
 plt.title('Average ionization level over time')
 
-plt.figure(33)
-plt.plot(z_loc, ni/4.3e20)
-plt.xlabel('z-location [cm]')
-plt.ylabel('Ion fraction')
-plt.legend(['n'+ str(i) for i in range(len(ni[0, :]))])
-plt.title('Ion fraction at t='+ str(np.round(t, 2)))
-
 t, energy_density, T, ni = read_data(file)
 energy_density = np.array(energy_density)
 T = np.array(T)
@@ -152,4 +153,35 @@ plt.xlabel('z-location [cm]')
 plt.ylabel('$\\bar{Z}$')
 plt.legend()
 plt.title('Average ionization level over time')
+
+t, energy_density, T, ni = read_data(file)
+energy_density = np.array(energy_density)
+T = np.array(T)
+ni = np.array(ni)
+
+plt.figure(11)
+plt.subplot(2, 1, 2)
+z_loc = cell_edges[:-1] + np.diff(cell_edges)/2
+plt.plot(z_loc, T, label='t='+str(np.round(t, 2)))
+plt.xlabel('z-location [cm]')
+plt.ylabel('Material temperature [keV]')
+plt.subplot(2, 1, 1)
+plt.plot(z_loc, (energy_density/(Constants.a*Constants.GJ2keV))**0.25, label='t='+str(t))
+plt.legend()
+plt.ylabel('Radiation Temperature [keV]')
+
+plt.figure(22)
+Z_bar = np.sum(ni/4.3e20*np.arange(len(ni[0, :])), axis=1)
+plt.plot(z_loc, Z_bar, label=str(t))
+plt.xlabel('z-location [cm]')
+plt.ylabel('$\\bar{Z}$')
+plt.legend()
+plt.title('Average ionization level over time')
+
+plt.figure(33)
+plt.plot(z_loc, ni/4.3e20)
+plt.xlabel('z-location [cm]')
+plt.ylabel('Ion fraction')
+plt.legend(['n'+ str(i) for i in range(len(ni[0, :]))])
+plt.title('Ion fraction at t='+ str(np.round(t, 2)))
 plt.show()

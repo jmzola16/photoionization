@@ -8,6 +8,30 @@ import Constants
 import CrossSectionFunctions as xsf
 from Particle import Particle
 import matplotlib.pyplot as plt
+from numba.experimental import jitclass
+from numba import int32, float64, typeof
+
+spec = [
+    ('N_levels', int32),
+    ('N_cells', int32),
+    ('cell_edges', float64[:]),
+    ('cell_centers', float64[:]),
+    ('Te', float64[:]),
+    ('flux', float64[:]),
+    ('energy_density', float64[:]),
+    ('ni', float64[:, :]),
+    ('dni', float64[:, :]),
+    ('atom_density', float64[:]),
+    ('ne', float64[:]),
+    # ('cell_mats', typeof(xsf.Nitrogen())[:]),
+    ('particle_tally', int32[:]),
+    ('recombination_N_per_cell', int32),
+    ('recomb_rate', float64[:, :]),
+    ('N_recomb', int32[:, :]),
+    ('photoi_rate', float64[:, :]),
+    ('dEpi', float64[:]),
+    ('dErr', float64[:])
+]
 
 class Mesh:
     def __init__(self, cell_edges, N_levels, cell_mats, atom_density, recombination_N_per_cell):
@@ -20,6 +44,7 @@ class Mesh:
 
         # Initialize temperature profile
         self.Te = 1e-5*np.ones((self.N_cells, ))
+        self.dT = np.zeros((self.N_cells, ))
 
         # Initialize flux and energy density
         self.flux = np.zeros((self.N_cells, ))
@@ -110,11 +135,11 @@ class Mesh:
                 recomb_rate_per_level[level] = min(self.cell_mats[cell].rr_n(self.Te[cell], level + 1)*self.ne[cell]*self.ni[cell, level + 1]*dt, old_mesh.ni[cell, level + 1] + self.dni[cell, level + 1])
                 tot_recomb_rate[cell] += recomb_rate_per_level[level]
 
-            self.recomb_rate[cell, :] = recomb_rate_per_level
+            self.recomb_rate[cell, :] = recomb_rate_per_level.copy()
 
             self.dni[cell, :-1] += self.recomb_rate[cell, :]
             self.dni[cell, 1:] -= self.recomb_rate[cell, :]
-            self.dErr[cell] += np.sum(self.recomb_rate[cell, :]*(self.cell_mats[cell].Eth + 1.5*self.Te[cell]))
+            self.dErr[cell] += np.sum(self.recomb_rate[cell, :]*(1.5*self.Te[cell])) # self.cell_mats[cell].Eth + 
 
             if tot_recomb_rate[cell] > 1e-4:
                 self.N_recomb[cell, :] = np.ceil(recomb_rate_per_level*self.recombination_N_per_cell/tot_recomb_rate[cell]).astype(int)
@@ -129,13 +154,13 @@ class Mesh:
                 for particle in range(self.N_recomb[cell, level]):
                     pos_in_cell = self.cell_edges[cell] + rng.random()*self.cell_widths[cell]
                     mu = rng.random()*2 - 1
-                    wgt = self.recomb_rate[cell, level]/(self.N_recomb[cell, level])
+                    wgt = self.recomb_rate[cell, level]*self.cell_widths[cell]/(self.N_recomb[cell, level])
                     start_time = dt*rng.random()
                     xi = rng.random()
 
                     cum_dErr[cell] += wgt*(self.cell_mats[cell].Eth[level] + xsf.sample_maxwellian(self.Te[cell], xi))
 
-                    nu = (self.cell_mats[cell].Eth[level] + xsf.sample_maxwellian(self.Te[cell], xi))/Constants.h
+                    nu = (self.cell_mats[cell].Eth[level] + xsf.sample_maxwellian(self.Te[cell], xi))/Constants.h # self.cell_mats[cell].Eth[level] + 
                     photon = Particle(pos_in_cell, mu, nu, wgt, cell, (dt - start_time)/dt*Constants.c*dt)
 
                     census.append(photon)
@@ -171,14 +196,18 @@ class Mesh:
     def copy(self):
         copied_mesh = Mesh(self.cell_edges, self.N_levels, self.cell_mats, self.atom_density, self.recombination_N_per_cell)
         copied_mesh.ni[:] = self.ni[:]
+        copied_mesh.flux[:] = self.flux[:]
         copied_mesh.ne[:] = self.ne[:]
         copied_mesh.Te[:] = self.Te[:]
         copied_mesh.particle_tally[:] = self.particle_tally[:]
+        copied_mesh.dni[:] = self.dni[:]
+        copied_mesh.dT[:] = self.dT[:]
 
         return copied_mesh
     
-    def update_state(self, old_mesh, dt, use_dEsp=False):
-        self.ni = old_mesh.ni + self.dni
+    def update_state(self, old_mesh, mesh_previt, dt, lam, use_dEsp=False):
+        ni_update = mesh_previt.dni + lam*(self.dni - mesh_previt.dni)
+        self.ni = old_mesh.ni + ni_update #self.dni*lam
         #dne = np.matmul(self.dni, np.arange(self.N_levels + 1))
         self.ne = np.matmul(self.ni, np.arange(self.N_levels + 1))
         dne = self.ne - old_mesh.ne
@@ -188,12 +217,15 @@ class Mesh:
             for cell in range(self.N_cells):
                 dEsp[cell] = self.cell_mats[cell].E_spectral(self.Te[cell], self.ni[cell, :])*dt
 
-        dT = (self.dEpi - self.dErr - dEsp - 1.5*self.Te*dne)/xsf.cv(self.Te, self.atom_density + self.ne)
-        self.Te = old_mesh.Te + dT
+        # TODO: Change cv according to \frac{\partial e}{\partial t} = \frac{\partial e}{partial T}*\frac{\partial T}{\partial T}
+
+        self.dT = (self.dEpi - self.dErr - dEsp - 1.5*self.Te*dne)/xsf.cv(self.Te, self.atom_density + self.ne)
+        T_update = mesh_previt.dT + lam*(self.dT - mesh_previt.dT)
+        self.Te = old_mesh.Te + T_update #dT*lam
 
     def plot_ionization_level(self, t):
         plt.figure()
-        for level in range(self.N_levels):
+        for level in range(self.N_levels + 1):
             plt.plot(self.cell_centers, self.ni[:, level]/self.atom_density)
         plt.xlabel('z-location [cm]')
         plt.ylabel('Ion Fraction [-]')
@@ -210,6 +242,32 @@ class Mesh:
         plt.xlabel('z-location [cm]')
         plt.ylabel(r'$ \overline{Z} $')
     
+    def plot_radiation_spectrum(self, census, z_pos, t):
+        cell = np.searchsorted(self.cell_edges, z_pos) - 1
+        plt.figure(100 + int(cell))
+
+        N_energy_bins = 40
+        energy_group_edges = np.linspace(1e-3, 1, N_energy_bins + 1)
+        energy_group_centers = energy_group_edges[:-1] + np.diff(energy_group_edges)
+        rad_spec = np.zeros((N_energy_bins, ))
+
+        for particle in census:
+            if particle.cell == cell:
+                if Constants.h*particle.nu > energy_group_edges[-1]:
+                    bin = N_energy_bins - 1
+                elif Constants.h*particle.nu < energy_group_edges[0]:
+                    bin = 0
+                else:
+                    bin = np.searchsorted(energy_group_edges, Constants.h*particle.nu) - 1
+                rad_spec[bin] += particle.w
+
+        rad_spec /= np.sum(rad_spec)
+
+        plt.plot(energy_group_centers, rad_spec, label='t='+str(np.round(t, 2)))
+        plt.title('Energy spectrum at z=' + str(z_pos))
+        plt.xlabel('Energy [keV]')
+        plt.ylabel('Particle Fraction')
+
     def plot_temperatures(self, t):
         plt.figure(22)
         plt.subplot(2, 1, 2)
@@ -240,13 +298,13 @@ class Mesh:
 
         form = ''
         for i in range(self.N_cells):
-            form += '{:e}, '.format(self.T[i])
+            form += '{:e}, '.format(self.Te[i])
         f.write(form)
         f.write('\n\n')
 
         for i in range(self.N_cells):
             form = ''
-            for j in range(self.N_levels):
+            for j in range(self.N_levels + 1):
                 form += '{:e}, '.format(self.ni[i, j])
 
             f.write(form + '\n')
