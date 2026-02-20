@@ -1,0 +1,50 @@
+{
+    "Name": "Salzmann",
+    "Max Particles": 1000000,
+    "Mesh": 
+    {
+        "Dimension": 1,
+        "Number of Cells": [100],
+        "Domain Bounds": [[0, 0.7]],
+        "Boundary Conditions": ["Vacuum", "Vacuum"],
+        "Particles Sourced Per Cell": 2000,
+        "Material": "Nitrogen",
+        "Density": [4.3e20]
+    },
+    "Physics":
+    {
+        "Radiative Recombination": true,
+        "Bremsstrahlung": true,
+        "Electron Impact Ionization": true
+    },
+    "Sources": 
+    [
+        {
+            "Type": "Boundary",
+            "Location": 0,
+            "Particles Sourced Per Time Step": 10000,
+            "Function": "Const",
+            "Temperature": 0.1
+        }
+    ],
+    "Outputs":
+    {
+        "Alpha": true,
+        "Spectrum": true,
+        "Temperatures": true,
+        "Average Ionization Level": true,
+        "Energy Balance": false,
+        "Initial Plot Time": 0.2,
+        "Plot Interval": 0.2,
+        "Verbose": true,
+        "Write to File": true,
+        "Plot Initial Spectrum": true
+    },
+    "Time":
+    {
+        "Use Num Time Steps": false,
+        "Max Time": 1,
+        "Time Step": 1e-3,
+        "Tolerance": 1e-4
+    }
+}

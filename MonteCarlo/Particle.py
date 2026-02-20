@@ -13,13 +13,13 @@ spec = [
     ('timestep_dist', float64),
 ]
 
-#@jitclass(spec)
+@jitclass(spec)
 class Particle:
     def __init__(self, x, mu, nu, w, cell, timestep_dist):
         self.x = x
         self.mu = mu
-        self.w = w
         self.nu = nu
+        self.w = w
         self.cell = cell
         self.timestep_dist = timestep_dist
         

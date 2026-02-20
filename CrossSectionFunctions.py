@@ -11,8 +11,9 @@ from numba import jit, int32, float64
 from numba.experimental import jitclass
 import matplotlib.pyplot as plt
 import Constants
+import math
 
-#@jit
+@jit
 def blackbody(nu_list, T):
     """
     Parameters
@@ -46,7 +47,7 @@ def blackbody(nu_list, T):
 
     return e
 
-#@jit
+@jit
 def sample_blackbody(T, xi):
     n = 1.0
     const = np.pi**4/90*xi[0]
@@ -58,10 +59,7 @@ def sample_blackbody(T, xi):
 
     return -1/n*np.log(np.prod(xi[1:]))*T/Constants.h
 
-    #nu0 = 2.71*T/h
-    #sol = scipy.optimize.root(lambda nu : 4*np.pi*scipy.integrate.quad(lambda nu_prime : blackbody(nu_prime, T), 1e6, nu)[0] - (a*c*T**4/keV2GJ)*xi, nu0, jac=lambda nu : 4*np.pi*blackbody(nu, T))
-    #return sol.x[0]
-
+@jit
 def integrate_planck_in_energy(hnu_low, hnu_high, T):
     N_terms = 12
     x_low = hnu_low/T
@@ -78,6 +76,7 @@ def integrate_planck_in_energy(hnu_low, hnu_high, T):
         
     return 2*Constants.h/Constants.c**2*flux
 
+@jit
 def integrate_planck_in_number(hnu_low, hnu_high, T):
     N_terms = 12
     x_low = hnu_low/T
@@ -94,6 +93,7 @@ def integrate_planck_in_number(hnu_low, hnu_high, T):
 
     return 2/(Constants.c**2)*flux
 
+@jit
 def sample_maxwellian(T, xi):
     return 1.5*T
 
@@ -103,7 +103,7 @@ spec = [
     ('Emax', float64[:]),
 ]
 
-#@jitclass(spec)
+@jitclass(spec)
 class Nitrogen():
     def __init__(self):
         self.Z = 7
@@ -167,125 +167,270 @@ class Nitrogen():
             
     def sigma_n(self, T, level):
         match level:
-            case 1:
+            case 0:
                 return self.sigma_n1(T)
-            case 2:
+            case 1:
                 return self.sigma_n2(T)
-            case 3:
+            case 2:
                 return self.sigma_n3(T)
-            case 4:
+            case 3:
                 return self.sigma_n4(T)
-            case 5:
+            case 4:
                 return self.sigma_n5(T)
-            case 6:
+            case 5:
                 return self.sigma_n6(T)
-            case 7:
+            case 6:
                 return self.sigma_n7(T)
 
-    def pixs_fitequation(self, E0, sigma0, ya, P, yw, y0, y1, E):
+    def tbr_n(self, T, level):
+        sigma_eii = self.sigma_n(T, level - 1)
+
+        #if T < 0.01:
+        #    tbr = self.sigma_n(0.01, level - 1)*0.5*((Constants.h*Constants.c)**2/(2*np.pi*Constants.me_keV*T))**1.5*np.exp(self.Eth[level - 1]/0.01)
+        #else:
+        #    tbr = sigma_eii*0.5*((Constants.h*Constants.c)**2/(2*np.pi*Constants.me_keV*T))**1.5*np.exp(self.Eth[level - 1]/T)
+
+        #log_space_tbr = np.log(sigma_eii*0.5*((Constants.h*Constants.c)**2/(2*np.pi*Constants.me_keV*T))**1.5)
+        log_space_tbr = np.log(sigma_eii*0.5) + 3*np.log(Constants.h*Constants.c) - 1.5*np.log(2*np.pi*Constants.me_keV*T)
+        log_space_tbr += (self.Eth[level] - self.Eth[level - 1])/T
+
+        #tbr = np.exp(log_space_tbr)
+#
+        #if math.isinf(tbr):
+        #    print("Infinite tbr reached")
+        #    print("In log space: ")
+        #    print(log_space_tbr)
+        #    print("EII: ")
+        #    print(sigma_eii)
+        #    print("Ratio of Threshhold energy to temp")
+        #    print((self.Eth[level] - self.Eth[level - 1])/T)
+        #    print("Temperature: ")
+        #    print(T)
+        #    print("Ionization Level: ")
+        #    print(level)
+        #    assert not math.isinf(tbr)
+
+        return log_space_tbr
+
+    def nl2ind(self, n, l):
+        return n + l - 1
+
+    def pixs_fitequation(self, E0, sigma0, ya, P, yw, y0, y1, E, subshell):
         # The fit equation for photoionization cross section
         x = E/E0 - y0
     
         y = np.sqrt(x**2 + y1**2)
     
         mb2cm2 = 1e-18 # Conversion factor from Mb to cm^2
+
+        Q = 0.5*P - 5.5 - subshell
     
-        return sigma0*((x - 1)**2 + yw**2)*y**(0.5*P - 5.5)*(1 + np.sqrt(y/ya))**(-P)*mb2cm2
+        return sigma0*((x - 1)**2 + yw**2)*y**(Q)*(1 + np.sqrt(y/ya))**(-P)*mb2cm2
 
     def pi_n1(self, E):
         # Input - energy in keV
-        E0 = 4.034e-3
-        sigma0 = 8.235e2
-        ya = 80.33
-        P = 3.928
-        yw = 9.097e-2
-        y0 = 0.8598
-        y1 = 2.325
+
+        if E < self.Emax[0]:
+            E0 = 4.034e-3
+            sigma0 = 8.235e2
+            ya = 80.33
+            P = 3.928
+            yw = 9.097e-2
+            y0 = 0.8598
+            y1 = 2.325
     
-        return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
+            return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E, 0)
+        else:
+            pixs_sum = 0.0
+            Eth_subshell = np.array([0.4048, 0.02541, 0.01453])
+            E0_subshell = np.array([0.1270, 0.01482, 0.01164])
+            sigma0_subshell = np.array([47.48, 772.2, 0.1029e5])
+            ya_subshell = np.array([138.0, 2.306, 2.361])
+            P_subshell = np.array([1.252, 9.139, 8.821])
+            yw_subshell = np.array([0.0, 0.0, 0.4239])
+            for n in range(1, 3):
+                for l in range(n):
+                    ind = self.nl2ind(n, l)
+                    if E >= Eth_subshell[ind]:
+                        pixs_sum += self.pixs_fitequation(E0_subshell[ind], sigma0_subshell[ind], ya_subshell[ind], P_subshell[ind], yw_subshell[ind], 0, 0, E, l)
+
+            return pixs_sum
 
     def pi_n2(self, E):
         # Input - energy in keV
-        E0 = 6.128e-5
-        sigma0 = 1.944
-        ya = 816.3
-        P = 8.773
-        yw = 10.43
-        y0 = 428
-        y1 = 20.30
+
+        if E < self.Emax[1]:
+            E0 = 6.128e-5
+            sigma0 = 1.944
+            ya = 816.3
+            P = 8.773
+            yw = 10.43
+            y0 = 428
+            y1 = 20.30
     
-        return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
+            return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E, 0)
+        else:
+            pixs_sum = 0.0
+            Eth_subshell = np.array([0.4236, 0.03796, 0.02960])
+            E0_subshell = np.array([0.1242, 0.01094, 0.01827])
+            sigma0_subshell = np.array([50.02, 0.7483e3, 0.1724e3])
+            ya_subshell = np.array([91.00, 2.793, 88.93])
+            P_subshell = np.array([1.335, 9.956, 3.348])
+            yw_subshell = np.array([0.0, 0.0, 0.4209])
+            for n in range(1, 3):
+                for l in range(n):
+                    ind = self.nl2ind(n, l)
+                    if E >= Eth_subshell[ind]:
+                        pixs_sum += self.pixs_fitequation(E0_subshell[ind], sigma0_subshell[ind], ya_subshell[ind], P_subshell[ind], yw_subshell[ind], 0, 0, E, l)
+
+            return pixs_sum
 
     def pi_n3(self, E):
         # Input - energy in keV
-        E0 = 0.2420e-3
-        sigma0 = 0.9375
-        ya = 278.8
-        P = 9.156
-        yw = 1.850
-        y0 = 187.7
-        y1 = 3.999
-    
-        return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
+
+        if E < self.Emax[2]:
+            E0 = 0.2420e-3
+            sigma0 = 0.9375
+            ya = 278.8
+            P = 9.156
+            yw = 1.850
+            y0 = 187.7
+            y1 = 3.999
+
+            return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E, 0)
+        else:
+            pixs_sum = 0.0
+            Eth_subshell = np.array([0.4473, 0.05545, 0.04745])
+            E0_subshell = np.array([0.1220, 5.853e-3, 0.01925])
+            sigma0_subshell = np.array([52.35, 0.1908e3, 94.00])
+            ya_subshell = np.array([94.28, 6.264, 0.1152e3])
+            P_subshell = np.array([1.335, 9.711, 3.194])
+            yw_subshell = np.array([0.0, 0.0, 0.5946])
+            for n in range(1, 3):
+                for l in range(n):
+                    ind = self.nl2ind(n, l)
+                    if E >= Eth_subshell[ind]:
+                        pixs_sum += self.pixs_fitequation(E0_subshell[ind], sigma0_subshell[ind], ya_subshell[ind], P_subshell[ind], yw_subshell[ind], 0, 0, E, l)
+
+            return pixs_sum
     
     def pi_n4(self, E):
         # Input - energy in keV
-        E0 = 5.494e-3
-        sigma0 = 1.690e4
-        ya = 1.714
-        P = 17.06
-        yw = 7.904
-        y0 = 6.415e-3
-        y1 = 1.937e-2
-    
-        return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
+
+        if E < self.Emax[3]:
+            E0 = 5.494e-3
+            sigma0 = 1.690e4
+            ya = 1.714
+            P = 17.06
+            yw = 7.904
+            y0 = 6.415e-3
+            y1 = 1.937e-2
+
+            return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E, 0)
+        else:
+            pixs_sum = 0.0
+            Eth_subshell = np.array([0.4753, 0.07747])
+            E0_subshell = np.array([0.1070, 6.225e-3])
+            sigma0_subshell = np.array([70.46, 0.1110e3])
+            ya_subshell = np.array([53.42, 17.33])
+            P_subshell = np.array([1.552, 6.719])
+            yw_subshell = np.array([0.0, 0.0])
+            for n in range(1, 3):
+                l = 0
+                ind = self.nl2ind(n, l)
+                if E >= Eth_subshell[ind]:
+                    pixs_sum += self.pixs_fitequation(E0_subshell[ind], sigma0_subshell[ind], ya_subshell[ind], P_subshell[ind], yw_subshell[ind], 0, 0, E, l)
+
+            return pixs_sum
     
     def pi_n5(self, E):
         # Input - energy in keV
-        E0 = 4.471e-3
-        sigma0 = 83.76
-        ya = 32.97
-        P = 6.003
-        yw = 0
-        y0 = 0
-        y1 = 0
-    
-        return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
+
+        if E < self.Emax[4]:
+            E0 = 4.471e-3
+            sigma0 = 83.76
+            ya = 32.97
+            P = 6.003
+            yw = 0
+            y0 = 0
+            y1 = 0
+
+            return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E, 0)
+        else:
+            pixs_sum = 0.0
+            Eth_subshell = np.array([0.5043, 0.09789])
+            E0_subshell = np.array([0.1060, 0.01862])
+            sigma0_subshell = np.array([73.04, 34.47])
+            ya_subshell = np.array([55.47, 42.31])
+            P_subshell = np.array([1.528, 3.606])
+            yw_subshell = np.array([0.0, 0.0])
+            for n in range(1, 3):
+                l = 0
+                ind = self.nl2ind(n, l)
+                if E >= Eth_subshell[ind]:
+                    pixs_sum += self.pixs_fitequation(E0_subshell[ind], sigma0_subshell[ind], ya_subshell[ind], P_subshell[ind], yw_subshell[ind], 0, 0, E, l)
+
+            return pixs_sum
     
     def pi_n6(self, E):
         # Input - energy in keV
-        E0 = 69.43e-3
-        sigma0 = 151.9
-        ya = 26.27
-        P = 2.315
-        yw = 0
-        y0 = 0
-        y1 = 0
-    
-        return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
+
+        if E < self.Emax[5]:
+            E0 = 69.43e-3
+            sigma0 = 151.9
+            ya = 26.27
+            P = 2.315
+            yw = 0
+            y0 = 0
+            y1 = 0
+
+            return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E, 0)
+        else:
+            Eth_subshell = 0.5521
+            E0 = 0.06943
+            sigma0 = 0.1519e3
+            ya = 26.27
+            P = 2.315
+            yw = 0
+            y0 = 0
+            y1 = 0
+            
+            if E >= Eth_subshell:
+                return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E, 0)
+            else:
+                return 0.0
     
     def pi_n7(self, E):
         # Input - energy in keV
-        E0 = 21.08e-3
-        sigma0 = 1.117e3
-        ya = 32.88
-        P = 2.693
-        yw = 0
-        y0 = 0
-        y1 = 0
-    
-        return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E)
 
-    def rrxs_fitequation(self, A, B, T0, T1, T, **kwargs):
-        # The fit equation for radiative recombination
-        for key, value in kwargs.items():
-            if key == 'C':
-                C = value
-            elif key == 'T2':
-                T2 = value
+        if E < self.Emax[6]:
+            E0 = 21.08e-3
+            sigma0 = 1.117e3
+            ya = 32.88
+            P = 2.693
+            yw = 0
+            y0 = 0
+            y1 = 0
+    
+            return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E, 0)
+        else:
+            Eth_subshell = 0.6671
+            E0 = 21.08e-3
+            sigma0 = 0.1117e4
+            ya = 32.88
+            P = 2.963
+            yw = 0
+            y0 = 0
+            y1 = 0
             
-        if len(kwargs) > 0:
-            B += C*np.exp(-T2/T)
+            if E >= Eth_subshell:
+                return self.pixs_fitequation(E0, sigma0, ya, P, yw, y0, y1, E, 0)
+            else:
+                return 0.0
+
+    def rrxs_fitequation(self, A, B, T0, T1, T, C, T2):
+        # The fit equation for radiative recombination
+        B += C*np.exp(-T2/T)
         
         is2ins = 1e-9 # Conversion factor from 1/s to 1/ns
         
@@ -299,7 +444,7 @@ class Nitrogen():
         C = 0.2440
         T2 = 6.739e4*Constants.k_B
     
-        return self.rrxs_fitequation(A, B, T0, T1, T, C=C, T2=T2)
+        return self.rrxs_fitequation(A, B, T0, T1, T, C, T2)
     
     def rr_n2(self, T):
         A = 2.410e-9
@@ -309,7 +454,7 @@ class Nitrogen():
         C = 0.0774
         T2 = 1.106e5*Constants.k_B
     
-        return self.rrxs_fitequation(A, B, T0, T1, T, C=C, T2=T2)
+        return self.rrxs_fitequation(A, B, T0, T1, T, C, T2)
 
     def rr_n3(self, T):
         A = 7.923e-10
@@ -319,44 +464,95 @@ class Nitrogen():
         C = 0.0223
         T2 = 7.206e4*Constants.k_B
     
-        return self.rrxs_fitequation(A, B, T0, T1, T, C=C, T2=T2)
+        return self.rrxs_fitequation(A, B, T0, T1, T, C, T2)
 
     def rr_n4(self, T):
         A = 1.553e-10
         B = 0.6682
         T0 = 1.823e2*Constants.k_B
         T1 = 7.751e6*Constants.k_B
+        C = 0.0
+        T2 = 0.0
     
-        return self.rrxs_fitequation(A, B, T0, T1, T)
+        return self.rrxs_fitequation(A, B, T0, T1, T, C, T2)
     
     def rr_n5(self, T):
         A = 6.245e-11
         B = 0.4985
         T0 = 1.957e3*Constants.k_B
         T1 = 2.177e7*Constants.k_B
+        C = 0.0
+        T2 = 0.0
     
-        return self.rrxs_fitequation(A, B, T0, T1, T)
+        return self.rrxs_fitequation(A, B, T0, T1, T, C, T2)
     
     def rr_n6(self, T):
         A = 2.388e-10
         B = 0.6732
         T0 = 3.960e2*Constants.k_B
         T1 = 3.583e7*Constants.k_B
+        C = 0.0
+        T2 = 0.0
     
-        return self.rrxs_fitequation(A, B, T0, T1, T)
+        return self.rrxs_fitequation(A, B, T0, T1, T, C, T2)
     
     def rr_n7(self, T):
         A = 6.170e-10
         B = 0.7481
         T0 = 1.316e2*Constants.k_B
         T1 = 3.427e7*Constants.k_B
+        C = 0.0
+        T2 = 0.0
     
-        return self.rrxs_fitequation(A, B, T0, T1, T)
+        return self.rrxs_fitequation(A, B, T0, T1, T, C, T2)
+
+    def ibrem_xs(self, mesh, cell, nu, method=2):
+        # Calculate the plasma frequency [ns]
+        plasma_freq_sq = Constants.e**2*mesh.ne[cell]/(Constants.me_kg*Constants.eps0)
+        Z_bar = mesh.ne[cell]/mesh.atom_density[cell]
+        
+        if method == 0:
+            # Drake (2016)
+            coul_log = max(1, (24 - np.log(np.sqrt(mesh.ne[cell])/((mesh.Te[cell]*1e3)**1.5))))
+            nu_ei = 3e-15*mesh.atom_density[cell]*Z_bar**2/((mesh.Te[cell]*1e3)**1.5)*coul_log
+
+            sigma_ib = nu_ei/(2*Constants.c)*plasma_freq_sq/(2*np.pi*nu)**2
+        elif method == 1:
+            # Johnston and Dawson (1973) [Salzmann 1998 pg 221]
+            vT = np.sqrt(3*mesh.Te[cell]*Constants.keV2J/(Constants.me_kg))*Constants.mps2cmpns  
+            classical_dist = self.Z*Constants.e**2/(mesh.Te[cell]*Constants.mps2cmpns**2*Constants.keV2J*4*np.pi*Constants.eps0)
+            deBroglie_wvln = Constants.h*Constants.keV2J*Constants.mps2cmpns/(2*np.pi*np.sqrt(Constants.me_kg*mesh.Te[cell]*Constants.keV2J))
+            pmin = max(classical_dist, deBroglie_wvln)
+
+            lam = min(vT/(pmin*np.sqrt(plasma_freq_sq)), vT/(pmin*2*np.pi*nu))
+
+            factor1 = 64*np.pi**3*Z_bar**2*mesh.ne[cell]*Constants.e**6*np.log(lam)
+            factor2 = (3*Constants.c*((2*np.pi*nu)**2 - plasma_freq_sq))*(2*np.pi*Constants.me_kg*mesh.Te[cell]*Constants.keV2J*Constants.mps2cmpns**2)**1.5
+
+            if (factor1 < 0):
+                sigma_ib = 1
+            elif (2*np.pi*nu)**2 > plasma_freq_sq:
+                sigma_ib = factor1/(factor2*(4*np.pi*Constants.eps0)**3)
+            else:
+                sigma_ib = 1e6
+        else:
+            # Zeldovitch and Raizer (1966) [Salzmann 1998 pg 220]
+            factor1 = 8*np.pi/(3*np.sqrt(3.0))*Constants.e**6*(Constants.h*Constants.c)**2/(Constants.me_keV)
+            factor2 = 1/np.sqrt(2*np.pi*Constants.me_keV*mesh.Te[cell])
+            factor3 = (Z_bar)**2*mesh.ne[cell]*(Constants.h*nu*Constants.keV2J*Constants.mps2cmpns**2)**-3
+
+            sigma_ib = factor1*factor2*factor3/(4*np.pi*Constants.eps0)**3
+
+        return sigma_ib
 
     def sigma_fitequation(self, dE, P, A, X, k, Te):
         U = dE/Te 
 
-        return A*(1 + P*U**0.5)/(X + U)*U**k*np.exp(-U)
+        is2ins = 1e-9 # Conversion factor from 1/s to 1/ns
+
+        sigma = is2ins*A*(1 + P*np.sqrt(U))/(X + U)*U**k*np.exp(-U)
+
+        return sigma
 
     def sigma_n1(self, Te):
         dE = 14.5e-3    # Ionization energy in [keV]
@@ -421,84 +617,27 @@ class Nitrogen():
 
         return self.sigma_fitequation(dE, P, A, X, k, Te)
 
-    def E_spectral(self, Te, ni):
-        h = 4.135e-9        # Planck's constant [keV-ns]
-        a = 0.01372
-        c = 30.0            # Speed of light [cm/s]
-        keV2GJ = 1.602e-25  # Conversion factor for keV to GJ
+#    def E_spectral(self, Te, ni):
+#        h = 4.135e-9        # Planck's constant [keV-ns]
+#        a = 0.01372
+#        c = 30.0            # Speed of light [cm/s]
+#        keV2GJ = 1.602e-25  # Conversion factor for keV to GJ
+#
+#        levels = len(ni)
+#        ne = np.dot(np.arange(1, levels), ni[1:])
+#
+#        Esp = 0.0
+#
+#        for i in range(levels - 1):
+#            Gamma = scipy.integrate.quad(lambda nu : blackbody(nu, Te)*self.pi_n(h*nu, i)*(h*nu - self.Eth[i]), self.Eth[i]/h, self.Emax[i]/h)[0]/(a*c*Te**4/(4*np.pi*keV2GJ))
+#            flux = scipy.integrate.quad(lambda nu : blackbody(nu, Te)/(h*nu), self.Eth[i]/h, self.Emax[i]/h)[0]
+#
+#            R = self.rr_n(Te, i + 1)*(1.5*Te + self.Eth[i])
+#
+#            Esp += Gamma*flux*ni[i] - R*ne*ni[i + 1]
+#
+#        return Esp
 
-        levels = len(ni)
-        ne = np.dot(np.arange(1, levels), ni[1:])
-
-        Esp = 0.0
-
-        for i in range(levels - 1):
-            Gamma = scipy.integrate.quad(lambda nu : blackbody(nu, Te)*self.pi_n(h*nu, i)*(h*nu - self.Eth[i]), self.Eth[i]/h, self.Emax[i]/h)[0]/(a*c*Te**4/(4*np.pi*keV2GJ))
-            flux = scipy.integrate.quad(lambda nu : blackbody(nu, Te)/(h*nu), self.Eth[i]/h, self.Emax[i]/h)[0]
-
-            R = self.rr_n(Te, i + 1)*(1.5*Te + self.Eth[i])
-
-            Esp += Gamma*flux*ni[i] - R*ne*ni[i + 1]
-
-        return Esp
-
-#@jit
+@jit
 def cv(T, rho):
     return 1.5*rho
-
-# Test sample blackbody and blackbody
-#N = 1000000
-#a = 0.01372
-#c = 30.0
-#keV2GJ = 1.602e-25
-#T = 0.1
-#h = 4.135e-9
-#bins = np.linspace(0, 5e9, 10000)
-#bin_centers = bins[:-1] + np.diff(bins)
-#bin_widths = np.diff(bins)
-#heights = np.zeros((len(bin_centers), ))
-#rng = np.random.default_rng()
-#analytic = blackbody(bin_centers, T)/(a*c*T**4/(4*np.pi*keV2GJ))
-#for i in range(N):
-#    nu = sample_blackbody(T, rng.random(5))
-#    if nu > bins[-1]:
-#        index = len(bin_centers) - 1
-#    else:
-#        index = np.searchsorted(bins, nu) - 1
-#    heights[index] += 1/(bin_widths[index]*N)
-#plt.bar(bin_centers*Constants.h, heights, bin_widths[0]*Constants.h, align='center')
-#plt.plot(bin_centers*Constants.h, analytic, 'tab:orange', label='Analytic')
-#plt.legend()
-#plt.show()
-
-# Plot recombination rates over temperature and photoionization cross-sections over energy
-#M = 1000
-#T_max = 0.1
-#T = np.linspace(1e-5, 0.1, M)
-#mat = Nitrogen()
-#n = 4.3e20
-#E = np.linspace(1e-3, 0.6, M)
-#
-#for level in range(mat.Z):
-#    plt.figure(1)
-#    rr_rate = np.zeros((M, ))
-#    for ind, temp in enumerate(T):
-#        rr_rate[ind] = mat.rr_n(temp, level + 1) #*level*n**2
-#    plt.semilogy(T, rr_rate, label="$RR_{"+str(level + 1)+"->"+str(level)+"}$")
-#    plt.figure(2)
-#    pi_rate = np.zeros((M, ))
-#    for ind, energy in enumerate(E):
-#        pi_rate[ind] = mat.pi_n(energy, level) #*n*blackbody(energy/Constants.h, T_max)[0]/energy
-#    plt.semilogy(E, pi_rate, label="$PI_{"+str(level)+"->"+str(level + 1)+"}$")
-#
-#plt.figure(1)
-#plt.title("Max RR rates over temperature")
-#plt.xlabel("Temperature [keV]")
-#plt.ylabel("RR Rate [$cm^{3} ns^{-1}$]")
-#plt.legend()
-#plt.figure(2)
-#plt.title("Photoionization rate for blackbody spectrum")
-#plt.xlabel("Photon Energy [keV]")
-#plt.ylabel("Photoionization rate [# $cm^{-3} ns^{-1}$]")
-#plt.legend()
-#plt.show()
