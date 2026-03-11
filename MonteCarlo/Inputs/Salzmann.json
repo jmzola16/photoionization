@@ -1,13 +1,14 @@
 {
     "Name": "Salzmann",
-    "Max Particles": 1000000,
+    "Max Particles": 10000,
     "Mesh": 
     {
         "Dimension": 1,
         "Number of Cells": [100],
         "Domain Bounds": [[0, 0.7]],
+        "Cell Spacing": "Salzmann",
         "Boundary Conditions": ["Vacuum", "Vacuum"],
-        "Particles Sourced Per Cell": 2000,
+        "Particles Sourced Per Cell": 20,
         "Material": "Nitrogen",
         "Density": [4.3e20]
     },
@@ -22,7 +23,7 @@
         {
             "Type": "Boundary",
             "Location": 0,
-            "Particles Sourced Per Time Step": 10000,
+            "Particles Sourced Per Time Step": 1000,
             "Function": "Const",
             "Temperature": 0.1
         }
@@ -38,12 +39,12 @@
         "Plot Interval": 0.2,
         "Verbose": true,
         "Write to File": true,
-        "Plot Initial Spectrum": true
+        "Plot Initial Spectrum": false
     },
     "Time":
     {
         "Use Num Time Steps": false,
-        "Max Time": 1,
+        "Max Time": 1.0,
         "Time Step": 1e-3,
         "Tolerance": 1e-4
     }

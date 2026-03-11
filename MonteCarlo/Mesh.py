@@ -61,7 +61,9 @@ class Mesh:
 
         # Initialize flux, energy groups, and energy density
         self.N_groups = 100
-        self.energy_group_edges = np.linspace(1e-3, 1, self.N_groups + 1)
+        self.energy_group_edges = np.zeros((self.N_groups + 1, ))
+        self.energy_group_edges[:5] = np.logspace(-9, -4, 5)
+        self.energy_group_edges[5:] = np.linspace(1e-3, 1, self.N_groups - 4)
         self.multigroup_flux = np.zeros((self.N_cells, self.N_groups))
         self.flux = np.zeros((self.N_cells, ))
         self.energy_density = np.zeros((self.N_cells, ))
@@ -104,7 +106,7 @@ class Mesh:
         self.dEb = np.zeros((self.N_cells, ))
         self.dErr = np.zeros((self.N_cells, ))
 
-    def absorb_particle(self, photon, old_mesh, dt):
+    def absorb_particle(self, photon, old_mesh, use_b, dt):
         # Store current cell locally, because it will change when particle is moved
         cell = photon.cell
 
@@ -113,7 +115,8 @@ class Mesh:
         Gamma_ib = np.zeros((self.N_levels, ))
         for level in range(self.N_levels):
             Gamma_pi[level] = self.cell_mats[cell].pi_n(Constants.h*photon.nu, level)*self.ni[cell, level]
-            Gamma_ib[level] = self.cell_mats[cell].ibrem_xs(self, cell, photon.nu, 2)*self.ni[cell, level]
+            if use_b:
+                Gamma_ib[level] = self.cell_mats[cell].ibrem_xs(self, cell, photon.nu, 2)*self.ni[cell, level]
         Gamma_ib[0] = 0 # TODO: Check if this is correct
         Gamma_tot = np.sum(Gamma_pi) + np.sum(Gamma_ib)
 

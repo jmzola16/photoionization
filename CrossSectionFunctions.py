@@ -211,6 +211,7 @@ class Nitrogen():
         #    assert not math.isinf(tbr)
 
         return log_space_tbr
+        #return tbr
 
     def nl2ind(self, n, l):
         return n + l - 1

@@ -20,7 +20,7 @@ def plot_average_ionization_level(mesh, t):
     for i in range(mesh.N_levels + 1):
         z_bar += i*mesh.ni[:, i]/mesh.atom_density
 
-    plt.plot(mesh.cell_centers, z_bar, label='t='+str(np.round(t, 2)))
+    plt.plot(mesh.cell_centers, z_bar, label=str(np.round(t, 2)) + ' ns')
     plt.xlabel('z-location [cm]')
     plt.ylabel(r'$ \overline{Z} $')
     
@@ -29,7 +29,7 @@ def plot_radiation_spectrum(mesh, census, z_pos, t, plotSpec):
     plt.figure(100 + int(cell))
 
     energy_group_centers = mesh.energy_group_edges[:-1] + np.diff(mesh.energy_group_edges)
-    energy_group_width = mesh.energy_group_edges[1] - mesh.energy_group_edges[0]
+    energy_group_widths = np.diff(mesh.energy_group_edges)
     rad_spec = np.zeros((mesh.N_groups, ))
 
     smooth_N = 100000
@@ -49,19 +49,20 @@ def plot_radiation_spectrum(mesh, census, z_pos, t, plotSpec):
     for particle in census:
         if particle.cell == cell:
             if Constants.h*particle.nu > mesh.energy_group_edges[-1]:
-                bin = mesh.N_groups - 1
+                #bin = mesh.N_groups - 1
+                continue
             elif Constants.h*particle.nu < mesh.energy_group_edges[0]:
                 bin = 0
             else:
                 bin = np.searchsorted(mesh.energy_group_edges, Constants.h*particle.nu) - 1
             rad_spec[bin] += particle.w*Constants.h*particle.nu
 
-    rad_spec /= np.sum(rad_spec)*energy_group_width
+    rad_spec /= np.sum(rad_spec)*energy_group_widths
 
     plt.plot(energy_group_centers, rad_spec, label='t='+str(np.round(t, 2)))
     if plotSpec:
         plt.plot(smooth_energy_spectrum, mat_planck_function, label='Mat. Planck')
-        plt.plot(smooth_energy_spectrum, rad_planck_function, label='Rad. Planck')
+        #plt.plot(smooth_energy_spectrum, rad_planck_function, label='Rad. Planck')
     #    print("Te: ", end='')
     #    print(mesh.Te[cell])
     #    print("Tot. blackbody rad. ", end='')
@@ -75,25 +76,29 @@ def plot_radiation_spectrum(mesh, census, z_pos, t, plotSpec):
     plt.legend()
 
     plt.figure(200 + int(cell))
-    plt.plot(energy_group_centers, mesh.multigroup_flux[cell, :]/(mesh.energy_density[cell]*energy_group_width), label='t='+str(np.round(t, 2)))
+    plt.plot(energy_group_centers, mesh.multigroup_flux[cell, :]/(mesh.energy_density[cell]*energy_group_widths), label=str(np.round(t, 2))+" ns")
     if plotSpec:
         plt.plot(smooth_energy_spectrum, mat_planck_function, label='Mat. Planck')
-        plt.plot(smooth_energy_spectrum, rad_planck_function, label='Rad. Planck')
+        #plt.plot(smooth_energy_spectrum, rad_planck_function, label='Rad. Planck')
 
     plt.title('Path Length energy spectrum at z=' + str(z_pos))
     plt.xlabel('Energy [keV]')
     plt.ylabel('Normalized Spectrum')
     plt.legend()
 
-def plot_temperatures(mesh, t):
+def plot_temperatures(mesh, t, Ts):
     plt.figure(22)
     plt.subplot(2, 1, 2)
-    plt.plot(mesh.cell_centers, mesh.Te, label='t='+str(np.round(t, 2)))
+    plt.plot(mesh.cell_centers, mesh.Te, label=str(np.round(t, 2))+' ns')
+    plt.xlim([mesh.cell_edges[0], mesh.cell_edges[-1]])
+    plt.ylim([0, Ts])
     plt.xlabel('z-location [cm]')
     plt.ylabel('Material temperature [keV]')
     plt.subplot(2, 1, 1)
-    plt.plot(mesh.cell_centers, (mesh.energy_density*Constants.keV2GJ/Constants.a)**0.25, label='t='+str(np.round(t, 2)))
+    plt.plot(mesh.cell_centers, (mesh.energy_density*Constants.keV2GJ/Constants.a)**0.25, label=str(np.round(t, 2))+' ns')
     plt.ylabel('Radiation temperature [keV]')
+    plt.xlim([mesh.cell_edges[0], mesh.cell_edges[-1]])
+    plt.ylim([0, Ts])
 
 def plot_alpha(mesh, t):
     plt.figure()
@@ -124,4 +129,4 @@ def write_data(mesh, file, t):
         f.write(form + '\n')
 
     f.write('\n')
-    f.close()    
+    f.close()

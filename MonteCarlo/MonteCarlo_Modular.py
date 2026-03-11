@@ -53,18 +53,38 @@ else:
 M = mesh_params["Number of Cells"][0]      # Number of cells
 n = mesh_params["Density"][0]              # Number density of particles in medium [particles/cm^3]
 bounds = mesh_params["Domain Bounds"][0]
-edges = np.linspace(bounds[0], bounds[1], M + 1)
+if mesh_params["Cell Spacing"].lower() == "linear":
+    edges = np.linspace(bounds[0], bounds[1], M + 1)
+elif mesh_params["Cell Spacing"].lower() == "salzmann":
+    edges = np.zeros((M + 1, ))
+    edges[1] = 5e-4
+    width = 5e-4
+    for i in range(M - 1):
+        edges[i + 2] = edges[i + 1] + 1.07*width
+        width *= 1.07
+elif mesh_params["Cell Spacing"].lower() == "logarithmic":
+    # Log space the first 10% of cells
+    M1 = int(np.floor(M*0.2))
+    M2 = M - M1 + 1
+    edges = np.zeros((M + 1, ))
+    edges[0] = bounds[0]
+    edges[1:(M1 + 1)] = np.logspace(-5, np.log(bounds[1]*0.2)/np.log(10), M1)
+    edges[M1:] = np.linspace(bounds[1]*0.2, bounds[1], M2)
 
 # Read number of particles sourced from atomic physics in cells
-if inputs["Physics"]["Radiative Recombination"] and inputs["Physics"]["Bremsstrahlung"]:
+use_rr = inputs["Physics"]["Radiative Recombination"]
+use_b = inputs["Physics"]["Bremsstrahlung"]
+use_eii = inputs["Physics"]["Electron Impact Ionization"]
+
+if use_rr and use_b:
     N_recomb_tot = int(mesh_params["Particles Sourced Per Cell"]/2)
     N_bremsstrahlung = int(mesh_params["Particles Sourced Per Cell"]/2)
     file_base += "Reemission_B_"
-elif inputs["Physics"]["Radiative Recombination"]:
+elif use_rr:
     N_recomb_tot = mesh_params["Particles Sourced Per Cell"]
     N_bremsstrahlung = 0
     file_base += "Reemission_"
-elif inputs["Physics"]["Bremsstrahlung"]:
+elif use_b:
     N_recomb_tot = 0
     N_bremsstrahlung = mesh_params["Particles Sourced Per Cell"]
     file_base += "B_"
@@ -72,34 +92,45 @@ else:
     N_recomb_tot = 0
     N_bremsstrahlung = 0
 
-if inputs["Physics"]["Electron Impact Ionization"]:
+if use_eii:
     file_base += "EII_"
 
 mesh = Mesh(edges, mat.Z, mat, n, N_recomb_tot, N_bremsstrahlung)
-
-# Source temperature function [keV]
-@jit
-def Ts_Const(t):
-    return Ts
-
-@jit
-def Ts_Ramp(t):
-    t_peak = 1
-    
-    if t < t_peak:
-        return (t/t_peak)*Ts
-    else:
-        return Ts
 
 # TODO: Make a source object which incorporates the source particles function and make an array of source 
 # to loop through in main time stepping portion of code
 for source in inputs["Sources"]:
     N_source = source["Particles Sourced Per Time Step"]   # Number of particles sourced per iteration
     Ts = source["Temperature"]                             # Peak Source temperature [keV]
+
+    # Source temperature function [keV]
     if source["Function"].lower() == "ramp":
-        Ts_Function = Ts_Ramp
+        t_peak = source["Peak Time"]
+        @jit
+        def Ts_Function(t):
+            if t < t_peak:
+                return (t/t_peak)*Ts
+            else:
+                return Ts
     elif source["Function"].lower() == "const":
-        Ts_Function = Ts_Const
+        @jit
+        def Ts_Function(t):
+            return Ts
+
+#print("N_source: ", end="")
+#print(N_source)
+#print("Source Temperature: ", end="")
+#print(Ts)
+#print("Peak Time: ", end="")
+#print(t_peak)
+#print("Function at t=0: ")
+#print(Ts_Function(0))
+#print("Function at t=0.5*t_peak: ", end="")
+#print(Ts_Function(0.5*t_peak))
+#print("Function at t=t_peak: ", end="")
+#print(Ts_Function(t_peak))
+#print("Function at t=2*t_peak: ", end="")
+#print(Ts_Function(2*t_peak))
 
 # Import information about time stepping
 use_num_time_steps = inputs["Time"]["Use Num Time Steps"]
@@ -113,13 +144,12 @@ else:
     steps = int(t_max/dt) + 1
 
 base_tol = inputs["Time"]["Tolerance"]
-#tot_recomb = np.zeros((M, 100))
 
 # Determine Output Information
 plot_time = inputs["Outputs"]["Initial Plot Time"]
 plot_interval = inputs["Outputs"]["Plot Interval"]
+plot_initial_energy_spectrum = inputs["Outputs"]["Plot Initial Spectrum"]
 
-# levels = mat.Z + 1             # Number of ionization levels
 # cv = 741/(keV2J*k_B)*(n/(Na)*rho_N)  # Material specific heat [keV/(keV*cm^3)]
 # Sigma = np.ones((M, ))*n*sigma_a    # Macroscopic photoionization cross-section
 peak_emission_rate = dt*2*np.pi*Constants.sigma_SB*Ts**4/(Constants.keV2GJ)
@@ -177,7 +207,7 @@ def advance_particles(census, cutoff, mesh, *varargs):
         while p.timestep_dist > 0 and p.cell < M and p.cell >= 0:
             # Use implicit capture to absorb particle and reduce weight, 
             # accounting for photoionization rate
-            mesh.absorb_particle(p, old_mesh, dt)
+            mesh.absorb_particle(p, old_mesh, use_b, dt)
         
         # Reset the distance each particle has traveled 
         p.timestep_dist = timestep_dist
@@ -191,14 +221,15 @@ def advance_particles(census, cutoff, mesh, *varargs):
             # Move on to the next particle
             index += 1
 
-    # Update the total flux
-    # mesh.flux = np.sum(mesh.multigroup_flux, axis=1)
+    # Update the total energy density
+    # mesh.energy_density = np.sum(mesh.multigroup_flux, axis=1)
 
     # Calculate electron impact ionization
     #mesh.calculate_eii(old_mesh, dt) # TODO: Operator split active. Deactivate before fooling around
 
     # Calculate recombination
-    mesh.calculate_rr_rate(old_mesh, dt)
+    if use_rr:
+        mesh.calculate_rr_rate(old_mesh, dt)
     #mesh.calculate_tbr_rate(old_mesh, dt) # TODO: Operator split active. Deactivate before fooling around
 
     return census, mesh
@@ -240,10 +271,12 @@ def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
 
         time1_recomb = time.time()
         # Use previous iteration's temperatures to source particles from recombination
-        census = mesh.source_particles_recombination(rng, census, dt)
+        if use_rr:
+            census = mesh.source_particles_recombination(rng, census, dt)
         time2_recomb = time.time()
 
-        census = mesh.source_particles_bremsstrahlung(rng, census, dt)
+        if use_b:
+            census = mesh.source_particles_bremsstrahlung(rng, census, dt)
 
         sourcing_particles_recomb[0] += time2_recomb - time1_recomb
         sourcing_particles_recomb[1] += 1
@@ -324,24 +357,25 @@ def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
     #    plt.show()
 
     # TODO: Operator split - perform eii and tbr calculations after converging on photoionization
-    mesh.dni[:] = np.zeros((mesh.N_cells, mesh.N_levels + 1))
-    mesh.calculate_eii(mesh, dt)
-    mesh.calculate_tbr_rate(mesh, dt)
-    mesh.ni = np.maximum(0.0, mesh.ni + mesh.dni)
-    mesh.ne = np.dot(mesh.ni, np.arange(mesh.N_levels + 1))
-    if np.any(mesh.ni < 0) or np.any(mesh.ni != mesh.ni):
-        print("Negative ni:")
-        print("Time step: ", end="")
-        print(t)
-        print("Ne")
-        print(mesh.ne)
-        print("ni")
-        print(mesh.ni)
-        print("dni")
-        print(mesh.dni)
-        
-        assert 0
-    mesh.dni[:] = np.zeros((mesh.N_cells, mesh.N_levels + 1)) # TODO: Part of operator split
+    if use_eii:
+        mesh.dni[:] = np.zeros((mesh.N_cells, mesh.N_levels + 1))
+        mesh.calculate_eii(mesh, dt)
+        mesh.calculate_tbr_rate(mesh, dt)
+        mesh.ni = np.maximum(0.0, mesh.ni + mesh.dni)
+        mesh.ne = np.dot(mesh.ni, np.arange(mesh.N_levels + 1))
+        if np.any(mesh.ni < 0) or np.any(mesh.ni != mesh.ni):
+            print("Negative ni:")
+            print("Time step: ", end="")
+            print(t)
+            print("Ne")
+            print(mesh.ne)
+            print("ni")
+            print(mesh.ni)
+            print("dni")
+            print(mesh.dni)
+
+            assert 0
+        mesh.dni[:] = np.zeros((mesh.N_cells, mesh.N_levels + 1)) # TODO: Part of operator split
 
     return census, mesh
     
@@ -387,7 +421,7 @@ for t in range(steps):
     sourcing_particles_boundary[0] += time2 - time1
     sourcing_particles_boundary[1] += 1
 
-    if t == 0:
+    if t == 0 and plot_initial_energy_spectrum:
         plot.plot_radiation_spectrum(mesh, census, 0.0035, 0, 0)
         plt.show()
 
@@ -438,7 +472,7 @@ for t in range(steps):
     russian_roulette[1] += 1
 
     if t*dt >= plot_time:
-        plot.plot_temperatures(mesh, t*dt)
+        plot.plot_temperatures(mesh, t*dt, Ts)
         plot.plot_average_ionization_level(mesh, t*dt)
         plot.plot_radiation_spectrum(mesh, census, 0.0035, t*dt, t*dt > t_max - plot_interval)
         plot.plot_radiation_spectrum(mesh, census, 0.2, t*dt, t*dt > t_max - plot_interval)

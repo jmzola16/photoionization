@@ -1,28 +1,29 @@
 {
     "Name": "Gray",
-    "Max Particles": 1000000,
+    "Max Particles": 10000,
     "Mesh": 
     {
         "Dimension": 1,
         "Number of Cells": [100],
         "Domain Bounds": [[0, 0.7]],
+        "Cell Spacing": "Linear",
         "Boundary Conditions": ["Vacuum", "Vacuum"],
-        "Particles Sourced Per Cell": 200,
+        "Particles Sourced Per Cell": 20,
         "Material": "Nitrogen",
         "Density": [2e20]
     },
     "Physics":
     {
-        "Radiative Recombination": true,
-        "Bremsstrahlung": true,
-        "Electron Impact Ionization": true
+        "Radiative Recombination": false,
+        "Bremsstrahlung": false,
+        "Electron Impact Ionization": false
     },
     "Sources": 
     [
         {
             "Type": "Temperature",
             "Location": 0,
-            "Particles Sourced Per Time Step": 10000,
+            "Particles Sourced Per Time Step": 1000,
             "Function": "Ramp",
             "Peak Time": 1.0,
             "Temperature": 0.1
@@ -39,7 +40,7 @@
         "Plot Interval": 0.5,
         "Verbose": true,
         "Write to File": true,
-        "Plot Initial Spectrum": true
+        "Plot Initial Spectrum": false
     },
     "Time":
     {
