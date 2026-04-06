@@ -507,28 +507,28 @@ class Nitrogen():
     
         return self.rrxs_fitequation(A, B, T0, T1, T, C, T2)
 
-    def ibrem_xs(self, mesh, cell, nu, method=2):
+    def ibrem_xs(self, mesh, index, nu, method=2):
         # Calculate the plasma frequency [ns]
-        plasma_freq_sq = Constants.e**2*mesh.ne[cell]/(Constants.me_kg*Constants.eps0)
-        Z_bar = mesh.ne[cell]/mesh.atom_density[cell]
+        plasma_freq_sq = Constants.e**2*mesh.ne[index]/(Constants.me_kg*Constants.eps0)
+        Z_bar = mesh.ne[index]/mesh.atom_density[index]
         
         if method == 0:
             # Drake (2016)
-            coul_log = max(1, (24 - np.log(np.sqrt(mesh.ne[cell])/((mesh.Te[cell]*1e3)**1.5))))
-            nu_ei = 3e-15*mesh.atom_density[cell]*Z_bar**2/((mesh.Te[cell]*1e3)**1.5)*coul_log
+            coul_log = max(1, (24 - np.log(np.sqrt(mesh.ne[index])/((mesh.Te[index]*1e3)**1.5))))
+            nu_ei = 3e-15*mesh.atom_density[index]*Z_bar**2/((mesh.Te[index]*1e3)**1.5)*coul_log
 
             sigma_ib = nu_ei/(2*Constants.c)*plasma_freq_sq/(2*np.pi*nu)**2
         elif method == 1:
             # Johnston and Dawson (1973) [Salzmann 1998 pg 221]
-            vT = np.sqrt(3*mesh.Te[cell]*Constants.keV2J/(Constants.me_kg))*Constants.mps2cmpns  
-            classical_dist = self.Z*Constants.e**2/(mesh.Te[cell]*Constants.mps2cmpns**2*Constants.keV2J*4*np.pi*Constants.eps0)
-            deBroglie_wvln = Constants.h*Constants.keV2J*Constants.mps2cmpns/(2*np.pi*np.sqrt(Constants.me_kg*mesh.Te[cell]*Constants.keV2J))
+            vT = np.sqrt(3*mesh.Te[index]*Constants.keV2J/(Constants.me_kg))*Constants.mps2cmpns  
+            classical_dist = self.Z*Constants.e**2/(mesh.Te[index]*Constants.mps2cmpns**2*Constants.keV2J*4*np.pi*Constants.eps0)
+            deBroglie_wvln = Constants.h*Constants.keV2J*Constants.mps2cmpns/(2*np.pi*np.sqrt(Constants.me_kg*mesh.Te[index]*Constants.keV2J))
             pmin = max(classical_dist, deBroglie_wvln)
 
             lam = min(vT/(pmin*np.sqrt(plasma_freq_sq)), vT/(pmin*2*np.pi*nu))
 
-            factor1 = 64*np.pi**3*Z_bar**2*mesh.ne[cell]*Constants.e**6*np.log(lam)
-            factor2 = (3*Constants.c*((2*np.pi*nu)**2 - plasma_freq_sq))*(2*np.pi*Constants.me_kg*mesh.Te[cell]*Constants.keV2J*Constants.mps2cmpns**2)**1.5
+            factor1 = 64*np.pi**3*Z_bar**2*mesh.ne[index]*Constants.e**6*np.log(lam)
+            factor2 = (3*Constants.c*((2*np.pi*nu)**2 - plasma_freq_sq))*(2*np.pi*Constants.me_kg*mesh.Te[index]*Constants.keV2J*Constants.mps2cmpns**2)**1.5
 
             if (factor1 < 0):
                 sigma_ib = 1
@@ -539,8 +539,8 @@ class Nitrogen():
         else:
             # Zeldovitch and Raizer (1966) [Salzmann 1998 pg 220]
             factor1 = 8*np.pi/(3*np.sqrt(3.0))*Constants.e**6*(Constants.h*Constants.c)**2/(Constants.me_keV)
-            factor2 = 1/np.sqrt(2*np.pi*Constants.me_keV*mesh.Te[cell])
-            factor3 = (Z_bar)**2*mesh.ne[cell]*(Constants.h*nu*Constants.keV2J*Constants.mps2cmpns**2)**-3
+            factor2 = 1/np.sqrt(2*np.pi*Constants.me_keV*mesh.Te[index])
+            factor3 = (Z_bar)**2*mesh.ne[index]*(Constants.h*nu*Constants.keV2J*Constants.mps2cmpns**2)**-3
 
             sigma_ib = factor1*factor2*factor3/(4*np.pi*Constants.eps0)**3
 

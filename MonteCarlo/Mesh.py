@@ -17,10 +17,13 @@ type_material = typeof(xsf.Nitrogen())
 
 spec = [
     ('N_levels', int32),
+    ('dim', int32),
     ('N_cells', int32),
+    ('cells_per_dim', int32[:]),
     ('cell_edges', float64[:]),
     ('cell_widths', float64[:]),
     ('cell_centers', float64[:]),
+    ('bcs', int32[:]),
     ('Te', float64[:]),
     ('dT', float64[:]),
     ('N_groups', int32),
@@ -47,13 +50,25 @@ spec = [
 
 @jitclass(spec)
 class Mesh:
-    def __init__(self, cell_edges, N_levels, cell_mats, atom_density, recombination_N_per_cell, bremsstrahlung_N):
+    def __init__(self, dim, cell_edges, N_levels, cells_per_dim, cell_mats, atom_density, recombination_N_per_cell, bremsstrahlung_N, bcs):
         # Initialize cell information
+        self.dim = dim
         self.N_levels = N_levels
-        self.N_cells = len(cell_edges) - 1
+        self.cells_per_dim = cells_per_dim
+        self.N_cells = np.prod(cells_per_dim)
         self.cell_edges = cell_edges
-        self.cell_widths = np.diff(cell_edges)
-        self.cell_centers = cell_edges[:-1] + self.cell_widths
+        self.cell_widths = np.zeros((np.sum(self.cells_per_dim), ))
+        self.cell_centers = np.zeros((np.sum(self.cells_per_dim), ))
+        start = 0
+        end = self.cells_per_dim[0]
+        for i in range(dim):
+            temp_slice = np.ascontiguousarray(self.cell_edges[(start + i):(end + i + 1)])
+            self.cell_widths[start:end] = np.diff(temp_slice)
+            self.cell_centers[start:end] = self.cell_edges[(start + i):(end + i)] + self.cell_widths[start:end]/2
+            start += end
+            if i < dim - 1:
+                end += self.cells_per_dim[i + 1]
+        self.bcs = bcs
 
         # Initialize temperature profile
         self.Te = 1e-5*np.ones((self.N_cells, ))
@@ -108,52 +123,128 @@ class Mesh:
 
     def absorb_particle(self, photon, old_mesh, use_b, dt):
         # Store current cell locally, because it will change when particle is moved
-        cell = photon.cell
+        cell_i = photon.cell_i
+        cell_k = photon.cell_k
+
+        index = self.get_index(cell_i, cell_k)
 
         # Calculate the photoionization cross-section for each level
         Gamma_pi = np.zeros((self.N_levels, ))
         Gamma_ib = np.zeros((self.N_levels, ))
         for level in range(self.N_levels):
-            Gamma_pi[level] = self.cell_mats[cell].pi_n(Constants.h*photon.nu, level)*self.ni[cell, level]
+            Gamma_pi[level] = self.cell_mats[index].pi_n(Constants.h*photon.nu, level)*self.ni[index, level]
             if use_b:
-                Gamma_ib[level] = self.cell_mats[cell].ibrem_xs(self, cell, photon.nu, 2)*self.ni[cell, level]
+                Gamma_ib[level] = self.cell_mats[index].ibrem_xs(self, index, photon.nu, 2)*self.ni[index, level]
         Gamma_ib[0] = 0 # TODO: Check if this is correct
         Gamma_tot = np.sum(Gamma_pi) + np.sum(Gamma_ib)
 
         # Move the particle, updating the cell tally in the process
-        self.particle_tally[cell] -= 1
+        self.particle_tally[index] -= 1
 
-        s = photon.move(self.cell_edges[cell:(cell + 2)])
+        x_edges = self.get_edges_dim(1)
+        z_edges = self.get_edges_dim(0)
+        s = photon.move(x_edges[cell_i:(cell_i + 2)], z_edges[(cell_k):(cell_k + 2)])
 
-        if photon.cell >= 0 and photon.cell < self.N_cells:
-            self.particle_tally[photon.cell] += 1
+        outside_bounds = self.check_boundary_conditions(photon)
+        if not outside_bounds:
+            self.particle_tally[self.get_index(photon.cell_i, photon.cell_k)] += 1
 
         # Calculate the flux from implicit capture of this photon
+        cell_vol = self.cell_widths[cell_k]
+        lin_index = 0
+        for i in range(self.dim - 1):
+            lin_index += self.cells_per_dim[i]
+            cell_vol *= self.cell_widths[lin_index + cell_i]
+        # cell_vol = self.cell_widths[cell_i]*self.cell_widths[self.cells_per_dim[0] + cell_k]
         if Gamma_tot < 1e-8:
-            dflux = s*photon.w/(self.cell_widths[cell]*dt)
+            dflux = s*photon.w/(cell_vol*dt)
         else:
-            dflux = 1/(Gamma_tot*self.cell_widths[cell]*dt)*photon.w*(1 - np.exp(-Gamma_tot*s))
+            dflux = 1/(Gamma_tot*cell_vol*dt)*photon.w*(1 - np.exp(-Gamma_tot*s))
 
         group = self.find_group(Constants.h*photon.nu)
-        self.multigroup_flux[cell, group] += dflux*Constants.h*photon.nu/Constants.c
-        self.flux[cell] += dflux
-        self.energy_density[cell] += dflux*Constants.h*photon.nu/Constants.c
+        self.multigroup_flux[index, group] += dflux*Constants.h*photon.nu/Constants.c
+        self.flux[index] += dflux
+        self.energy_density[index] += dflux*Constants.h*photon.nu/Constants.c
 
         for level in range(self.N_levels):
             # Calculate the number of photoionized particles for this ionization state
             # If this would photoionize more than remaining particles, reduce to zero instead
-            photoi = min(old_mesh.ni[cell, level] + self.dni[cell, level], Gamma_pi[level]*dflux*dt)
+            photoi = min(old_mesh.ni[index, level] + self.dni[index, level], Gamma_pi[level]*dflux*dt)
 
-            self.dni[cell, level] -= photoi
-            self.dni[cell, level + 1] += photoi
-            self.photoi_rate[cell, level] += photoi
-            self.dEpi[cell] += photoi*(Constants.h*photon.nu - self.cell_mats[cell].Eth[level])
-            self.dEib[cell] += Gamma_ib[level]*dflux*dt*Constants.h*photon.nu
+            self.dni[index, level] -= photoi
+            self.dni[index, level + 1] += photoi
+            self.photoi_rate[index, level] += photoi
+            self.dEpi[index] += photoi*(Constants.h*photon.nu - self.cell_mats[index].Eth[level])
+            self.dEib[index] += Gamma_ib[level]*dflux*dt*Constants.h*photon.nu
 
         photon.reduce_weight(s, Gamma_tot)
 
-        return 0
+        return outside_bounds
     
+    def get_index(self, cell_i, cell_k):
+        return self.cells_per_dim[0]*cell_i + cell_k
+    
+    def get_cell_indices(self, cell):
+        cell_i = int(cell/self.cells_per_dim[0])
+        cell_k = np.mod(cell, self.cells_per_dim[0])
+
+        return cell_i, cell_k
+
+    def get_edges_dim(self, dim):
+        start = 0
+        end = self.cells_per_dim[0] + 1
+        for i in range(dim):
+            start += self.cells_per_dim[i] + 1
+            end += self.cells_per_dim[i + 1] + 1
+
+        return self.cell_edges[start:end]
+    
+    def get_widths_dim(self, dim):
+        start = 0
+        end = self.cells_per_dim[0]
+
+        for i in range(dim):
+            start += self.cells_per_dim[i]
+            end += self.cells_per_dim[i + 1]
+
+        return self.cell_widths[start:end]
+    
+    def get_centers_dim(self, dim):
+        start = 0
+        end = self.cells_per_dim[0]
+
+        for i in range(dim):
+            start += self.cells_per_dim[i]
+            end += self.cells_per_dim[i + 1]
+
+        return self.cell_centers[start:end]
+
+    def check_boundary_conditions(self, p):
+        index_list = np.array([p.cell_k, p.cell_i])
+        for i in range(self.dim):
+            if index_list[i] < 0:
+                match self.bcs[i*2]:
+                    case 0:
+                        return True
+                    case 1:
+                        p.mu = p.mu*(-1)**(i == 0)
+                        p.phi = np.pi*(i == 1) + p.phi
+                        p.phi -= 2*np.pi*(p.phi >= 2*np.pi)
+                        p.cell_i += (i == 1)
+                        p.cell_k += (i == 0)
+            elif index_list[i] >= self.cells_per_dim[i]:
+                match self.bcs[i*2 + 1]:
+                    case 0:
+                        return True
+                    case 1:
+                        p.mu = p.mu*(-1)**(i == 0)
+                        p.phi = np.pi*(i == 1) + p.phi
+                        p.phi -= 2*np.pi*(p.phi >= 2*np.pi)
+                        p.cell_i -= (i == 1)
+                        p.cell_k -= (i == 0)
+
+        return False
+
     def calculate_eii(self, old_mesh, dt):
         # This function calculates the ionization from electron impact
         for cell in range(self.N_cells):
@@ -224,18 +315,26 @@ class Mesh:
         # This function adds particles to a census after sourcing them from recombination
         cum_dErr = np.zeros((self.N_cells, ))
         for cell in range(self.N_cells):
+            cell_i, cell_k = self.get_cell_indices(cell)
+            cell_vol = self.cell_widths[cell_k]
+            lin_index = 0
+            for i in range(self.dim - 1):
+                lin_index += self.cells_per_dim[i]
+                cell_vol *= self.cell_widths[lin_index + cell_i]
             for level in range(self.N_levels):
                 for particle in range(self.N_recomb[cell, level]):
-                    pos_in_cell = self.cell_edges[cell] + rng.random()*self.cell_widths[cell]
+                    x_pos_in_cell = self.get_edges_dim(1)[cell_i] + rng.random()*self.get_widths_dim(1)[cell_i]
+                    z_pos_in_cell = self.get_edges_dim(0)[cell_k] + rng.random()*self.get_widths_dim(0)[cell_k]
                     mu = rng.random()*2 - 1
-                    wgt = self.recomb_rate[cell, level]*self.cell_widths[cell]/(self.N_recomb[cell, level])
+                    phi = rng.random()*2*np.pi
+                    wgt = self.recomb_rate[cell, level]*cell_vol/(self.N_recomb[cell, level])
                     start_time = dt*rng.random()
                     xi = rng.random()
 
                     cum_dErr[cell] += wgt*(self.cell_mats[cell].Eth[level] + xsf.sample_maxwellian(self.Te[cell], xi))
 
                     nu = (self.cell_mats[cell].Eth[level] + xsf.sample_maxwellian(self.Te[cell], xi))/Constants.h # self.cell_mats[cell].Eth[level] + 
-                    photon = Particle(pos_in_cell, mu, nu, wgt, cell, (dt - start_time)/dt*Constants.c*dt)
+                    photon = Particle(x_pos_in_cell, z_pos_in_cell, mu, phi, nu, wgt, cell_i, cell_k, (dt - start_time)/dt*Constants.c*dt)
 
                     census.append(photon)
                     self.particle_tally[cell] += 1
@@ -245,12 +344,21 @@ class Mesh:
 ################### NEW - BREMSSTRAHLUNG SOURCE ##################################################
 
     def source_particles_bremsstrahlung(self, rng, census, dt):
+        # TODO: Make sure weights are correct (are in units of particle number)
         for cell in range(self.N_cells):
-            unadj_wgt = Constants.sigma_SB*self.Te[cell]**4/(Constants.keV2GJ)
-            sum_brems_xs = np.zeros((self.N_cells, ))
+            cell_i, cell_k = self.get_cell_indices(cell)
+            cell_vol = self.cell_widths[cell_k]
+            lin_index = 0
+            for i in range(self.dim - 1):
+                lin_index += self.cells_per_dim[i]
+                cell_vol *= self.cell_widths[lin_index + cell_i]
+            unadj_wgt = Constants.a*self.Te[cell]**4/(Constants.keV2GJ)
+            #sum_brems_xs = 0.0
             for particle in range(self.bremsstrahlung_N):
-                pos_in_cell = self.cell_edges[cell] + rng.random()*self.cell_widths[cell]
+                x_pos_in_cell = self.get_edges_dim(1)[cell_i] + rng.random()*self.get_widths_dim(1)[cell_i]
+                z_pos_in_cell = self.get_edges_dim(0)[cell_k] + rng.random()*self.get_widths_dim(0)[cell_k]
                 mu = rng.random()*2 - 1
+                phi = rng.random()*2*np.pi
                 start_time = dt*rng.random()
                 xi = rng.random(5)
 
@@ -261,30 +369,31 @@ class Mesh:
                 #wgt = self.cell_mats[cell].ibrem_xs(self, cell, nu, 2)*self.ni[cell, level]*xsf.blackbody(nu, self.Te[cell])[0]*dt*self.cell_widths[cell]*4*np.pi/(self.bremsstrahlung_N*Constants.h)
                 #wgt = self.cell_mats[cell].ibrem_xs(self, cell, nu, 2)*self.ni[cell, level]*unadj_wgt*self.cell_widths[cell]/(self.bremsstrahlung_N*self.N_levels*Constants.h*nu)
                 #conv_const = 1
-                conv_const = Constants.c*dt*4*np.pi/(Constants.h*nu)
+                conv_const = dt*cell_vol/(Constants.h*nu)
                 wgt = sigma_brem_tot*unadj_wgt/(self.bremsstrahlung_N)
-                sum_brems_xs[cell] += wgt
+                #sum_brems_xs += sigma_brem_tot
 
-                photon = Particle(pos_in_cell, mu, nu, conv_const*wgt, cell, (dt - start_time)/dt*Constants.c*dt)
+                photon = Particle(x_pos_in_cell, z_pos_in_cell, mu, phi, nu, conv_const*wgt, cell_i, cell_k, (dt - start_time)/dt*Constants.c*dt)
 
                 census.append(photon)
                 self.particle_tally[cell] += 1
                 
             for index in range(self.bremsstrahlung_N):
-                #census[-index - 1].w /= sum_brems_xs[cell]
-                self.dEb[cell] += Constants.h*census[-index - 1].nu*census[-index - 1].w
+                #if sum_brems_xs != 0 : census[-index - 1].w /= sum_brems_xs
+                # TODO: Divide by cell volume to get an energy density
+                self.dEb[cell] += Constants.h*census[-index - 1].nu*census[-index - 1].w/cell_vol
 
         return census #, sum_brems_xs
 
 #################################################################################################
 
-    def alpha(self):
+    def alpha(self, start, end):
         alpha = np.zeros((self.N_cells, self.N_levels))
         
         for level in range(self.N_levels):
             alpha[:, level] = self.recomb_rate[:, level]/self.photoi_rate[:, level]
         
-        return alpha
+        return alpha[start:end, :]
     
     def find_group(self, energy):
         if energy > self.energy_group_edges[-1]:
@@ -315,7 +424,7 @@ class Mesh:
         return 0
     
     def copy(self):
-        copied_mesh = Mesh(np.zeros((self.N_cells + 1, )), self.N_levels, self.cell_mats[0], self.atom_density[0], np.zeros((self.N_cells, ), dtype=int32), self.bremsstrahlung_N)
+        copied_mesh = Mesh(self.dim, self.cell_edges, self.N_levels, self.cells_per_dim, self.cell_mats[0], self.atom_density[0], self.recombination_N_per_cell, self.bremsstrahlung_N, self.bcs)
         copied_mesh.ni = self.ni.copy()
         copied_mesh.flux = self.flux.copy()
         copied_mesh.ne = self.ne.copy()

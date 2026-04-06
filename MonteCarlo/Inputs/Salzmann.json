@@ -3,11 +3,11 @@
     "Max Particles": 10000,
     "Mesh": 
     {
-        "Dimension": 1,
-        "Number of Cells": [100],
-        "Domain Bounds": [[0, 0.7]],
-        "Cell Spacing": "Salzmann",
-        "Boundary Conditions": ["Vacuum", "Vacuum"],
+        "Dimension": 2,
+        "Number of Cells": [100, 1],
+        "Domain Bounds": [[0, 0.7], [0, 1]],
+        "Cell Spacing": ["Salzmann", "Linear"],
+        "Boundary Conditions": [["Vacuum", "Vacuum"], ["Reflecting", "Reflecting"]],
         "Particles Sourced Per Cell": 20,
         "Material": "Nitrogen",
         "Density": [4.3e20]
