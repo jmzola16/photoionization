@@ -9,6 +9,7 @@ geometry
 """
 
 import numpy as np
+import math
 import matplotlib.pyplot as plt
 import time
 import sys
@@ -23,11 +24,12 @@ from Particle import Particle
 from Mesh import Mesh
 import PlottingFunctions as plot
 import Constants
+import Sources
 import json
 
 # Read input file
-file = open('Inputs/Gray.json', 'r')
-inputs = json.load(file)
+with open('Inputs/Gray.json', 'r') as file:
+    inputs = json.load(file)
 
 # Construct file to write out to
 path = '../Data/'
@@ -49,7 +51,6 @@ else:
     print("Materials other than Nitrogen not currently supported! Aborting...")
     assert 0
 
-# TODO: Change mesh class to take array input for multiple dimensions
 dim = mesh_params["Dimension"]
 M = np.zeros((dim, ), dtype=np.int32)
 bounds = np.zeros((dim, 2))
@@ -75,7 +76,29 @@ for pair in mesh_params["Boundary Conditions"]:
 
     bc_idx += 2
 
-n = mesh_params["Density"][0]              # Number density of particles in medium [particles/cm^3]
+# Print mesh information to console
+print(f"Initializing a {dim:d}-dimensional mesh with: ")
+for i in range(dim):
+    match bcs[i*2]:
+        case 0:
+            low_bc_string = "vacuum"
+        case 1:
+            low_bc_string = "reflecting"
+        case _:
+            low_bc_string = "unknown"
+
+    match bcs[i*2 + 1]:
+        case 0:
+            high_bc_string = "vacuum"
+        case 1:
+            high_bc_string = "reflecting"
+        case _:
+            high_bc_string = "unknown"
+
+    print(f"\t {M[i]} {mesh_params['Cell Spacing'][i].lower()}-spaced cells with {low_bc_string} " \
+          f"boundary at {bounds[i, 0]} and {high_bc_string} boundary at {bounds[i, 1]} in dim {(i + 1):d}")
+
+n = np.array(mesh_params["Density"])             # Number density of particles in medium [particles/cm^3]
 edges = np.zeros((np.sum(M) + dim, ))
 start = 0
 end = M[0] + 1
@@ -93,7 +116,7 @@ for i in range(dim):
         M1 = int(np.floor(M[i]*0.2))
         M2 = M[i] - M1 + 1
         edges[start] = bounds[start]
-        edges[(start + 1):(start + M1 + 1)] = np.logspace(-5, np.log(bounds[1]*0.2)/np.log(10), M1)
+        edges[(start + 1):(start + M1 + 1)] = np.logspace(-5, math.log(bounds[1]*0.2)/math.log(10), M1)
         edges[(start + M1):end] = np.linspace(bounds[1]*0.2, bounds[1], M2)
 
     if i < dim - 1:
@@ -126,8 +149,9 @@ if use_eii:
 
 mesh = Mesh(dim, edges, mat.Z, M, mat, n, N_recomb_tot, N_bremsstrahlung, bcs)
 
-# TODO: Make a source object which incorporates the source particles function and make an array of source 
-# to loop through in main time stepping portion of code
+source_list = []
+peak_emission_rate = 1e10
+print(f"Creating {len(inputs["Sources"])} sources: ")
 for source in inputs["Sources"]:
     N_source = source["Particles Sourced Per Time Step"]   # Number of particles sourced per iteration
     Ts = source["Temperature"]                             # Peak Source temperature [keV]
@@ -145,6 +169,41 @@ for source in inputs["Sources"]:
         @jit
         def Ts_Function(t):
             return Ts
+        
+    if source["Type"].lower() == "point":
+        x_loc = source["Location"][0]
+        z_loc = source["Location"][1]
+        mu_range = source["Mu Range"]
+        phi_range = source["Phi Range"]
+        new_source = Sources.Point_Source(x_loc, z_loc, mu_range, phi_range)
+        solid_angle = (new_source.mu_range[1] - new_source.mu_range[0])*(new_source.phi_range[1] - new_source.phi_range[0])
+        peak_emission_rate = max(peak_emission_rate, solid_angle*Constants.sigma_SB*Ts**3/(2.71*Constants.keV2GJ))
+
+        print(f"\t {Ts} keV point source at ({source['Location']}) with polar cosine between" \
+              f"{source['Mu Range'][0]} and {source['Mu Range'][1]} azimuthal angle" \
+              f"between {source['Phi Range'][0]} and {source['Phi Range'][1]}")
+
+    elif source["Type"].lower() == "plane":
+        plane_loc = source["Location"]
+        plane_range = source["Plane Extents"]
+        match source["Parallel Plane"]:
+            case 'xy':
+                plane_code = 0
+            case 'yz':
+                plane_code = 1
+            case 'xz':
+                plane_code = 2
+            case _:
+                plane_code = -1
+
+        source_face = source["Source Face"]
+        new_source = Sources.Plane_Source(plane_loc, plane_range, plane_code, source_face)
+        peak_emission_rate = max(peak_emission_rate, (new_source.plane_range[1] - new_source.plane_range[0])*2*math.pi*Constants.sigma_SB*Ts**3/(2.71*Constants.keV2GJ))
+
+        print(f"\t {Ts} keV plane source parallel to {source['Parallel Plane']}-plane at {plane_loc} " \
+              f"between {plane_range[0]} and {plane_range[1]}")
+
+    source_list.append(new_source)
 
 # Import information about time stepping
 use_num_time_steps = inputs["Time"]["Use Num Time Steps"]
@@ -164,14 +223,12 @@ plot_time = inputs["Outputs"]["Initial Plot Time"]
 plot_interval = inputs["Outputs"]["Plot Interval"]
 plot_initial_energy_spectrum = inputs["Outputs"]["Plot Initial Spectrum"]
 be_verbose = inputs["Outputs"]["Verbose"]
+debug_mode = inputs["Outputs"]["Debug"]
 
-# TODO: Multiply by emission area for source
-x_edges = mesh.get_edges_dim(1)
-peak_emission_rate = (x_edges[-1] - x_edges[0])*dt*2*np.pi*Constants.sigma_SB*Ts**4/(Constants.keV2GJ)
-tol = base_tol*np.array([n, peak_emission_rate/(dt*2.71*Ts), Ts])                          # Tolerance for iterative solver
+tol = base_tol*np.array([np.max(n), peak_emission_rate, Ts])                          # Tolerance for iterative solver
 
 # Input checking
-if be_verbose:
+if be_verbose and source["Function"].lower() == 'ramp':
     print("N_source: {0}".format(N_source))
     print("Source Temperature: {:3.1g}".format(Ts))
     print("Peak Time: {:3.1g}".format(t_peak))
@@ -191,6 +248,7 @@ per_iteration = [0.0, 0]
 per_time_step = [0.0, 0]
 sourcing_particles_boundary = [0.0, 0]
 sourcing_particles_recomb = [0.0, 0]
+sourcing_particles_brems = [0.0, 0]
 russian_roulette = [0.0, 0]
 
 # Plotting variables
@@ -198,37 +256,7 @@ dErr_vec = []
 dEpi_vec = []
 
 @jit
-def source_particles(rng, census, mesh, dt, source_loc, N_source, Ts, t):
-    # TODO: Add a function like this for each type of source in our source class
-    x_edges = mesh.get_edges_dim(1)
-    z_edges = mesh.get_edges_dim(0)
-    cell_area = (x_edges[-1] - x_edges[0])
-    emission_rate = cell_area*dt*2*np.pi*Constants.sigma_SB*Ts(t)**4/(Constants.keV2GJ)  # Specific intensity of photons emitted [keV/(cm^2)]
-    w0 = emission_rate/N_source
-    cutoff = 1e-10*w0
-    for i in range(N_source):
-        # For each particle to source, sample parameters
-        start_time = dt*rng.random()
-        xi = rng.random(5)
-        x = rng.random()*(x_edges[-1] - x_edges[0]) + x_edges[0]
-        cell_i = np.searchsorted(x_edges, x) - 1
-        mu = np.sqrt(rng.random())
-        phi = rng.random()*2*np.pi
-        nu = xsf.sample_blackbody(Ts(t), xi)
-            
-        timestep_dist = Constants.c*dt
-        
-        # Construct the photon and add to census, counting particles in each cell
-        photon = Particle(x, z_edges[source_loc], mu, phi, nu, w0/(Constants.h*nu), cell_i, source_loc, (dt - start_time)/dt*timestep_dist)
-        census.append(photon)
-
-        source_index = mesh.get_index(cell_i, source_loc)
-        mesh.particle_tally[source_index] += 1
-        
-    return census, mesh, cutoff
-
-@jit
-def advance_particles(census, cutoff, mesh, *varargs):
+def advance_particles(census, cutoff, mesh, timestep_dist, *varargs):
     if len(varargs) > 0:
         old_mesh = varargs[0]
     else:
@@ -238,6 +266,7 @@ def advance_particles(census, cutoff, mesh, *varargs):
 
     # Move particles through timestep
     index = 0
+    leaked_energy = 0.0
     while index < len(census):
         p = census[index]
         # For every particle in the system
@@ -250,9 +279,9 @@ def advance_particles(census, cutoff, mesh, *varargs):
         # Reset the distance each particle has traveled 
         p.timestep_dist = timestep_dist
             
-        # TODO: Update to evaluate boundary conditions
         if p.w < cutoff or outside_bounds:
             # If the particle has a weight below the cutoff or leaves the domain remove it
+            leaked_energy += Constants.h*p.nu*p.w
             census.pop(index)
             if p.w < cutoff and not outside_bounds:
                 mesh.particle_tally[mesh.get_index(p.cell_i, p.cell_k)] -= 1
@@ -271,12 +300,12 @@ def advance_particles(census, cutoff, mesh, *varargs):
         mesh.calculate_rr_rate(old_mesh, dt)
     #mesh.calculate_tbr_rate(old_mesh, dt) # TODO: Operator split active. Deactivate before fooling around
 
-    return census, mesh
+    return census, mesh, leaked_energy
 
-def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
+def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
     # Define error metrics and max iterations
     it = 0
-    err = np.ones((3, ))*n
+    err = np.ones((3, ))*np.max(n)
     err_per_it = np.zeros((3, max_it))
     Z_bar_five_it = np.zeros((mesh.cells_per_dim[0], 5))
     flux_five_it = np.zeros((mesh.cells_per_dim[0], 5))
@@ -286,20 +315,22 @@ def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
     # Copy the initial population which can be reused in each iteration
     population = List()
     #population = []
-    for i in range(len(census)):
-        population.append(census[i].copy())
+    for p in census:
+        population.append(p.copy())
 
     # Hold data from previous iterations as convergence criteria
     old_mesh = mesh.copy()
     mesh_previt = mesh.copy()
+    mesh_prev_previt = mesh.copy()
     mesh_previt.reset_iteration()
+    mesh_prev_previt.reset_iteration()
 
     while (np.any(abs(err) > tol) and it < max_it):
         time1_it = time.time()
         census = List()
         #census = []
-        for i in range(len(population)):
-            census.append(population[i].copy())
+        for p in population:
+            census.append(p.copy())
         #census = copy.deepcopy(population)
 
         # Reset particle tally
@@ -308,23 +339,37 @@ def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
         # Set the random number seed for generating new particles
         rng = np.random.default_rng(seed)
 
-        time1_recomb = time.time()
-        # Use previous iteration's temperatures to source particles from recombination
-        if use_rr:
-            census = mesh.source_particles_recombination(rng, census, dt)
-        time2_recomb = time.time()
+        #time1_recomb = time.time()
+        ## Use previous iteration's temperatures to source particles from recombination
+        #if use_rr:
+        #    census = mesh.source_particles_recombination(rng, census, dt)
+        #time2_recomb = time.time()
 
-        if use_b:
-            census = mesh.source_particles_bremsstrahlung(rng, census, dt)
+        #sourcing_particles_recomb[0] += time2_recomb - time1_recomb
+        #sourcing_particles_recomb[1] += 1
 
-        sourcing_particles_recomb[0] += time2_recomb - time1_recomb
-        sourcing_particles_recomb[1] += 1
-
-        census, mesh = advance_particles(census, cutoff, mesh, old_mesh)
+        census, mesh, leaked_energy = advance_particles(census, cutoff, mesh, timestep_dist, old_mesh)
 
         # Calculate the update to ionization level and associated error
         mesh.update_state(old_mesh, mesh_previt, dt, (1.0 + 0.0*(it == 0)), False) ##########
         
+        time1_recomb = time.time()
+        # Use previous iteration's temperatures to source particles from recombination
+        if use_rr:
+            census = mesh.source_particles_recombination(rng, census, cutoff, dt)
+        time2_recomb = time.time()
+
+        sourcing_particles_recomb[0] += time2_recomb - time1_recomb
+        sourcing_particles_recomb[1] += 1
+
+        time1_brems = time.time()
+        if use_b:
+            census = mesh.source_particles_bremsstrahlung(rng, census, cutoff, dt)
+        time2_brems = time.time()
+
+        sourcing_particles_brems[0] += time2_brems - time1_brems
+        sourcing_particles_brems[1] += 1
+
         err[0] = np.linalg.norm(mesh.ni - mesh_previt.ni)
         err_per_it[0, it] = err[0]
         for i in range(mesh.N_levels):
@@ -338,11 +383,13 @@ def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
         err[2] = np.linalg.norm(mesh.Te - mesh_previt.Te)
         err_per_it[2, it] = err[2]
 
+        mesh_prev_previt = mesh_previt.copy()
         mesh_previt = mesh.copy()
 
+        # Debugging: Record flux, Z_bar and T over the first five iterations
         x_loc = 0.15
         x_edges = mesh.get_edges_dim(1)
-        x_ind = np.searchsorted(x_edges, x_loc)
+        x_ind = np.searchsorted(x_edges, x_loc) - 1
         start = x_ind*mesh.cells_per_dim[0]
         end = (x_ind + 1)*mesh.cells_per_dim[0]
         if it < 5:
@@ -350,6 +397,15 @@ def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
             flux_five_it[:, it] = mesh.flux[start:end]
             T_five_it[:, it] = mesh.Te[start:end]
         
+        # Debugging: Check if oscillations occur
+        if debug_mode and it > 1:
+            if np.linalg.norm(mesh.Te - mesh_prev_previt.Te) < tol[2]:
+                print("Temperature potentially oscillating")
+            if np.linalg.norm(mesh.ni - mesh_prev_previt.ni) < tol[0]:
+                print("Ion Density potentially oscillating")
+            if np.linalg.norm(mesh.flux - mesh_prev_previt.flux) < tol[1]:
+                print("Flux potentially oscillating")
+
         it += 1
 
         time2_it = time.time()
@@ -362,45 +418,46 @@ def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
         print("Flux rel err: {:g}".format(err[1]/tol[1]))
         print("T rel err {:g} \n".format(err[2]/tol[2]))
 
-        #plt.figure(55)
-        #plt.plot(np.arange(max_it), err_per_level.T)
-        #plt.xlabel("N iterations")
-        #plt.ylabel("Err")
-        #plt.legend([str(level) for level in range(mesh.N_levels + 1)])
-        #plt.title("Error per level")
-#
-        #for i in range(3):
-        #    plt.figure(50 + i)
-        #    plt.subplot(2, 1, 2)
-        #    plt.semilogy(np.arange(max_it), err_per_it[i, :], label='t=' + str(dt*t))
-        #    plt.xlabel("N iterations")
-        #    plt.ylabel("Err")
-#
-        #symbols = ['o', 'v', '^', '<', '>']
-#
-        #for i in range(5):
-        #    plt.figure(51)
-        #    plt.subplot(2, 1, 1)
-        #    plt.plot(mesh.get_centers_dim(0), flux_five_it[:, i], label=str(i))
-        #    plt.title('Flux')
-        #    plt.figure(52)
-        #    plt.subplot(2, 1, 1)
-        #    plt.plot(mesh.get_centers_dim(0), T_five_it[:, i], label=str(i))
-        #    plt.title('Temperature')
-        #    plt.figure(50)
-        #    plt.subplot(2, 1, 1)
-        #    plt.plot(mesh.get_centers_dim(0), Z_bar_five_it[:, i], symbols[i], label=str(i))
-        #    plt.title(r'$\overline{Z}$')
-        #
-        #plt.figure(50)
-        #plt.legend()
-        #plt.figure(51)
-        #plt.legend()
-        #plt.figure(52)
-        #plt.legend()
-        #plt.show()
+        if debug_mode:
+            plt.figure(55)
+            plt.plot(np.arange(max_it), err_per_level.T)
+            plt.xlabel("N iterations")
+            plt.ylabel("Err")
+            plt.legend([str(level) for level in range(mesh.N_levels + 1)])
+            plt.title("Error per level")
 
-    # TODO: Operator split - perform eii and tbr calculations after converging on photoionization
+            for i in range(3):
+                plt.figure(50 + i)
+                plt.subplot(2, 1, 2)
+                plt.semilogy(np.arange(max_it), err_per_it[i, :], label='t=' + str(dt*t))
+                plt.xlabel("N iterations")
+                plt.ylabel("Err")
+
+            symbols = ['o', 'v', '^', '<', '>']
+
+            for i in range(5):
+                plt.figure(51)
+                plt.subplot(2, 1, 1)
+                plt.plot(mesh.get_centers_dim(0), flux_five_it[:, i], label=str(i))
+                plt.title('Flux')
+                plt.figure(52)
+                plt.subplot(2, 1, 1)
+                plt.plot(mesh.get_centers_dim(0), T_five_it[:, i], label=str(i))
+                plt.title('Temperature')
+                plt.figure(50)
+                plt.subplot(2, 1, 1)
+                plt.plot(mesh.get_centers_dim(0), Z_bar_five_it[:, i], symbols[i], label=str(i))
+                plt.title(r'$\overline{Z}$')
+
+            plt.figure(50)
+            plt.legend()
+            plt.figure(51)
+            plt.legend()
+            plt.figure(52)
+            plt.legend()
+            plt.show()
+
+    # TODO: Operator split - perform eii and tbr calculations after converging on photoionization and recombination
     if use_eii:
         mesh.dni[:] = np.zeros((mesh.N_cells, mesh.N_levels + 1))
         mesh.calculate_eii(mesh, dt)
@@ -419,9 +476,8 @@ def iterative_solver(census, cutoff, mesh, tol, max_it, seed):
             print(mesh.dni)
 
             assert 0
-        mesh.dni[:] = np.zeros((mesh.N_cells, mesh.N_levels + 1)) # TODO: Part of operator split
 
-    return census, mesh
+    return census, mesh, leaked_energy, it
     
 def two_state_plots(edges, ni, n, energy_density, t):
     plt.subplot(2, 1, 2)
@@ -434,7 +490,7 @@ def two_state_plots(edges, ni, n, energy_density, t):
     plt.ylabel('Rad. Energy Density [keV/cm$^3$]')
 
 # Create particle census
-type_photon = Particle(0.1, 0.1, 0.5, np.pi, 800.0, 1.0, 0, 0, 0.0)
+type_photon = Particle(0.1, 0.1, 0.5, math.pi, 800.0, 1.0, 0, 0, 0.0)
 census = List.empty_list(typeof(type_photon))
 #census = []
 
@@ -453,19 +509,41 @@ spectrum_file = file_base + 'SpectrumData' + str(index) + '.txt'
 f = open(spectrum_file, 'w')
 f.close()
 
+total_energy_sourced = 0
+system_energy = 0
+boundary_source_energy = np.zeros((steps, ))
+photoi_absorbed_energy = np.zeros((steps))
+ibrems_absorbed_energy = np.zeros((steps, ))
+tot_absorbed_energy = np.zeros((steps, ))
+rr_emitted_energy = np.zeros((steps, ))
+brems_emitted_energy = np.zeros((steps, ))
+tot_emitted_energy = np.zeros((steps, ))
+internal_ionization_energy = np.zeros((steps, ))
+delta_material_energy = np.zeros((steps, ))
+leaked_energy_vec = np.zeros((steps, ))
+total_energy_in_system = np.zeros((steps, ))
+total_energy_in_particles = np.zeros((steps, ))
+cell_vols = np.ravel(np.tensordot(mesh.get_widths_dim(1), mesh.get_widths_dim(0), axes=0))
+average_iterations = np.array([0, 0])
+
+max_error_count = 0
+
 # Begin time stepping loop
 for t in range(steps):
     # Seed random number generator
     rng = np.random.default_rng(t)
     
-    # Boundary source information
-    source_loc = int(0)
+    # Distance particle can travel in one time step
     timestep_dist = Constants.c*dt
 
     # Source particles from boundary condition for each time step
     time1 = time.time()
-    census, mesh, cutoff = source_particles(rng, census, mesh, dt, source_loc, N_source, Ts_Function, (t + 1)*dt)
+    for source in source_list:
+        census, mesh, cutoff, source_energy = source.source_particles(rng, census, mesh, dt, N_source, Ts_Function, (t + 1)*dt)
     time2 = time.time()
+    total_energy_sourced += source_energy
+    system_energy += source_energy
+    boundary_source_energy[t] += source_energy
     sourcing_particles_boundary[0] += time2 - time1
     sourcing_particles_boundary[1] += 1
 
@@ -473,17 +551,71 @@ for t in range(steps):
         plot.plot_radiation_spectrum(mesh, census, 0.0035, 0, 0)
         plt.show()
 
+    old_ni = mesh.ni
+
     # Invoke iterative solver to converge ni, T
     time1 = time.time()
-    census, mesh = iterative_solver(census, cutoff, mesh, tol, 100, t)
+    census, mesh, leaked_energy, num_its = iterative_solver(census, cutoff, mesh, timestep_dist, tol, 100, t)
     time2 = time.time()
     per_time_step[0] += time2 - time1
     per_time_step[1] += 1
 
+    average_iterations[0] += num_its
+    average_iterations[1] += 1
+
     dErr_vec.append(mesh.dErr[0])
     dEpi_vec.append(mesh.dEpi[0])
 
-    #tot_recomb[:, t] = np.sum(mesh.recomb_rate, axis=1)
+    photoi_absorbed_energy[t] += np.dot(mesh.dEpi, cell_vols)
+    ibrems_absorbed_energy[t] += np.dot(mesh.dEib, cell_vols)
+    tot_absorbed_energy[t] += photoi_absorbed_energy[t] + ibrems_absorbed_energy[t]
+
+    rr_emitted_energy[t] += np.dot(mesh.dErr, cell_vols)
+    brems_emitted_energy[t] += np.dot(mesh.dEb, cell_vols)
+    tot_emitted_energy[t] += rr_emitted_energy[t] + brems_emitted_energy[t]
+
+    if t > 0 and max_error_count < 10 and (ibrems_absorbed_energy[t] > 0.25e17 or brems_emitted_energy[t] > 0.25e17):
+        fig = plt.figure(800 + max_error_count)
+        plt.plot(mesh.dEib, label='Inverse Brems. by Cell', c='tab:blue')
+        plt.plot(mesh.dEb, label='Brems. by Cell', c='tab:orange')
+        plt.xlabel("Cell no.")
+        plt.ylabel("Change in Energy")
+        ax = fig.get_axes()[0]
+        yyax = ax.twinx()
+        yyax.plot(mesh.Te, label='Material Temperature', c='tab:green')
+        yyax.set_ylabel('Temperature [keV]')
+        plt.legend()
+        plt.title("Large Bremsstrahlung XS at t=" + str(t*dt))
+        max_error_count += 1
+
+    delta_material_energy[t] += tot_absorbed_energy[t] - tot_emitted_energy[t] + np.dot(mesh.dEtbr, cell_vols) - np.dot(mesh.dEeii, cell_vols)
+
+    internal_ionization_energy[t] = np.dot(np.matmul(mesh.ni[:, 1:] - old_ni[:, 1:], np.cumsum(mesh.cell_mats[0].Eth)), cell_vols)
+    leaked_energy_vec[t] += leaked_energy
+
+    particle_energy = 0
+    for particle in census:
+        particle_energy += Constants.h*particle.nu*particle.w
+
+    system_energy -= delta_material_energy[t] + internal_ionization_energy[t] + leaked_energy
+    #system_energy -= np.dot(mesh.photoi_absorb_tot, cell_vols) + leaked_energy - tot_emitted_energy[t] + np.dot(mesh.dEtbr, cell_vols) - np.dot(mesh.dEeii, cell_vols)
+    total_energy_in_system[t] = system_energy
+    total_energy_in_particles[t] = particle_energy
+
+    if be_verbose and abs(total_energy_in_particles[t] - total_energy_in_system[t]) > abs(base_tol*total_energy_in_particles[t]):
+        print("Energy imbalance: ")
+        print("Time: {:5.3g}".format(t*dt))
+        print("Total Energy in System: {:18.13e}".format(system_energy))
+        print("Energy Sourced From Boundary per Step: {:18.13e}".format(boundary_source_energy[t]))
+        print("Total Emitted Energy: {:18.13e}".format(tot_emitted_energy[t]))
+        print("Total Absorbed Energy: {:18.13e}".format(np.dot(mesh.photoi_absorb_tot, cell_vols)))
+        print("Change in Material Energy: {:18.13e}".format(delta_material_energy[t]))
+        print("Change in Ionization Energy: {:18.13e}".format(internal_ionization_energy[t]))
+        print("Leaked Energy: {:18.13e}".format(leaked_energy))
+        print("Total Energy in Radiation: {:18.13e}".format(particle_energy))
+        print("Total number of particles {:d}".format(len(census)))
+
+        assert 0
 
     time1 = time.time()
     # Roulette particles to reduce particle counts
@@ -523,20 +655,45 @@ for t in range(steps):
     russian_roulette[0] += time2 - time1
     russian_roulette[1] += 1
 
+#    if debug_mode:
+#        print(t*dt)
+
     if t*dt >= plot_time:
         x_line = 0.15
-        plot.plot_temperatures_lineout(mesh, t*dt, Ts, x_line)
-        plot.plot_temperatures_multicell(mesh, t*dt, Ts, 0, 1)
-        plot.plot_average_ionization_level_lineout(mesh, t*dt, x_line)
-        plot.plot_average_ionization_level_multicell(mesh, t*dt, 0, 1)
-        plot.plot_radiation_spectrum(mesh, census, x_line, 0.0035, t*dt, t*dt > t_max - plot_interval)
-        plot.plot_radiation_spectrum(mesh, census, x_line, 0.2, t*dt, t*dt > t_max - plot_interval)
-        plot.plot_radiation_spectrum(mesh, census, x_line, 0.35, t*dt, t*dt > t_max - plot_interval)
-        plot.plot_alpha_lineout(mesh, t*dt, x_line)
+        if inputs["Name"].lower() == "gray":
+            plot.plot_temperatures_lineout(mesh, t*dt, Ts, 0, x_line)
+            plot.plot_temperatures_multicell(mesh, t*dt, Ts, 0, 1)
+            plot.plot_average_ionization_level_lineout(mesh, t*dt, 0, x_line)
+            plot.plot_average_ionization_level_multicell(mesh, t*dt, 0, 1)
+            plot.plot_alpha_lineout(mesh, t*dt, x_line)
+            plot.plot_radiation_spectrum(mesh, census, x_line, 0.0035, t*dt, t*dt > t_max - plot_interval)
+            plot.plot_radiation_spectrum(mesh, census, x_line, 0.2, t*dt, t*dt > t_max - plot_interval)
+            plot.plot_radiation_spectrum(mesh, census, x_line, 0.35, t*dt, t*dt > t_max - plot_interval)
+            plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.0035, t*dt)
+            plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.2, t*dt)
+            plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.35, t*dt)
+        if inputs["Name"].lower() == "gray_vertical":
+            plot.plot_temperatures_lineout(mesh, t*dt, Ts, 1, x_line)
+            plot.plot_temperatures_multicell(mesh, t*dt, Ts, 1, 0)
+            plot.plot_average_ionization_level_lineout(mesh, t*dt, 1, x_line)
+            plot.plot_average_ionization_level_multicell(mesh, t*dt, 1, 0)
+            plot.plot_radiation_spectrum(mesh, census, 0.0035, x_line, t*dt, t*dt > t_max - plot_interval)
+            plot.plot_radiation_spectrum(mesh, census, 0.2, x_line, t*dt, t*dt > t_max - plot_interval)
+            plot.plot_radiation_spectrum(mesh, census, 0.35, x_line, t*dt, t*dt > t_max - plot_interval)
+            plot.write_spectrum_data(mesh, census, spectrum_file, 0.0035, x_line, t*dt)
+            plot.write_spectrum_data(mesh, census, spectrum_file, 0.2, x_line, t*dt)
+            plot.write_spectrum_data(mesh, census, spectrum_file, 0.35, x_line, t*dt)
+        if inputs["Name"].lower() == "gasjet" or inputs["Name"].lower() == "gasjetfewercells":
+            plot.plot_temperatures_lineout(mesh, t*dt, Ts, 0, 1.35)
+            plot.plot_temperatures_lineout(mesh, t*dt, Ts, 1, 0.85)
+            plot.plot_temperatures_heatmap(mesh, t*dt)
+            plot.plot_average_ionization_level_lineout(mesh, t*dt, 0, 1.35)
+            plot.plot_average_ionization_level_lineout(mesh, t*dt, 1, 0.85)
+            plot.plot_average_ionization_level_heatmap(mesh, t*dt)
+            plot.plot_radiation_spectrum(mesh, census, 1.35, 0.85, t*dt, t*dt > t_max - plot_interval)
+            plot.write_spectrum_data(mesh, census, spectrum_file, 1.35, 0.85, t*dt)
+
         plot.write_state_data(mesh, state_file, t*dt)
-        plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.0035, t*dt)
-        plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.2, t*dt)
-        plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.35, t*dt)
         print(t*dt)
         plot_time += plot_interval
 
@@ -553,13 +710,19 @@ plt.show()
 #plt.legend()
 #plt.show()
 
-plot.plot_ionization_level_lineout(mesh, t_max, 0.0035)
+if inputs["Name"].lower() == "gray":
+    plot.plot_ionization_level_lineout(mesh, t_max, 0, 0.0035)
+    plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.0035, t*dt)
+    plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.2, t*dt)
+    plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.35, t*dt)
+if inputs["Name"].lower() == "gray_vertical":
+    plot.plot_ionization_level_lineout(mesh, t_max, 1, 0.0035)
+    plot.write_spectrum_data(mesh, census, spectrum_file, 0.0035, x_line, t*dt)
+    plot.write_spectrum_data(mesh, census, spectrum_file, 0.2, x_line, t*dt)
+    plot.write_spectrum_data(mesh, census, spectrum_file, 0.35, x_line, t*dt)
 plt.show()
 
 plot.write_state_data(mesh, state_file, np.round(t*dt, 2))
-plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.0035, t*dt)
-plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.2, t*dt)
-plot.write_spectrum_data(mesh, census, spectrum_file, x_line, 0.35, t*dt)
 
 if be_verbose:
     print("Time spent:")
@@ -577,12 +740,37 @@ if be_verbose:
     print(sourcing_particles_boundary[0]/sourcing_particles_boundary[1])
     print("Sourcing particles from recombination: ", end='')
     print(sourcing_particles_recomb[0]/sourcing_particles_recomb[1])
+    print("Sourcing particles from bremsstrahlung: ", end='')
+    print(sourcing_particles_brems[0]/sourcing_particles_brems[1])
     print("Russian rouletting particles: ", end='')
     print(russian_roulette[0]/russian_roulette[1])
+    print()
+    print("Average Iterations Per Time Step: ", end='')
+    print(average_iterations[0]/average_iterations[1])
 
 if inputs["Outputs"]["Energy Balance"]:
     time = np.linspace(0, t_max, steps)
     plt.plot(time, dEpi_vec, label='$dE_{pi}$')
     plt.plot(time, dErr_vec, label='$dE_{rr}$')
+    plt.legend()
+    plt.show()
+
+    plt.plot(time, boundary_source_energy, label='Src.')
+    #plt.plot(time, tot_absorbed_energy, label='Abs.')
+    #plt.plot(time, tot_emitted_energy, label='Emit.')
+    plt.plot(time, delta_material_energy, label='Mat.')
+    plt.plot(time, leaked_energy_vec, label='Leaked')
+    plt.plot(time, internal_ionization_energy, label='Ion.')
+    plt.plot(time, total_energy_in_particles, label='Part.')
+    plt.legend()
+    plt.show()
+
+    plt.plot(time, total_energy_in_particles, label='Part.')
+    plt.plot(time, total_energy_in_system, label='Bal.')
+    plt.legend()
+    plt.show()
+
+    plt.plot(time, ibrems_absorbed_energy, label='Inverse Brems. Abs.')
+    plt.plot(time, brems_emitted_energy, label='Brems. Emi.')
     plt.legend()
     plt.show()

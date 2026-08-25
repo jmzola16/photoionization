@@ -14,15 +14,18 @@
     },
     "Physics":
     {
-        "Radiative Recombination": true,
-        "Bremsstrahlung": true,
-        "Electron Impact Ionization": true
+        "Radiative Recombination": false,
+        "Bremsstrahlung": false,
+        "Electron Impact Ionization": false
     },
     "Sources": 
     [
         {
-            "Type": "Temperature",
+            "Type": "Plane",
             "Location": 0,
+            "Plane Extents": [0, 0.3],
+            "Parallel Plane": "xy",
+            "Source Face": 1,
             "Particles Sourced Per Time Step": 1000,
             "Function": "Ramp",
             "Peak Time": 1.0,
@@ -35,12 +38,13 @@
         "Spectrum": true,
         "Temperatures": true,
         "Average Ionization Level": true,
-        "Energy Balance": false,
+        "Energy Balance": true,
         "Initial Plot Time": 0.5,
         "Plot Interval": 0.5,
         "Verbose": true,
         "Write to File": true,
-        "Plot Initial Spectrum": false
+        "Plot Initial Spectrum": false,
+        "Debug": false
     },
     "Time":
     {

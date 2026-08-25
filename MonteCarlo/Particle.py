@@ -2,6 +2,7 @@
 from numba.experimental import jitclass
 from numba import float64, int64
 import numpy as np
+import math
 import Constants
 
 spec = [
@@ -29,14 +30,19 @@ class Particle:
         self.cell_k = cell_k
         self.timestep_dist = timestep_dist
         
-    def move(self, x_bounds, z_bounds):
+    def move(self, x_bounds, z_bounds, max_dist_photoi):
         # Move a particle along its direction vector
-        cosphi = np.cos(self.phi)
+        cosphi = math.cos(self.phi)
 
         z_dist = (z_bounds[1] - self.z)/self.mu*(self.mu > 0) + (self.z - z_bounds[0])/self.mu*(self.mu < 0)
-        x_dist = (x_bounds[1] - self.x)/(np.sqrt(1 - self.mu**2)*cosphi)*(cosphi > 0) + (self.x - x_bounds[0])/(np.sqrt(1 - self.mu**2)*cosphi)*(cosphi < 0)
+        x_dist = (x_bounds[1] - self.x)/(math.sqrt(1 - self.mu**2)*cosphi)*(cosphi > 0) + (self.x - x_bounds[0])/(math.sqrt(1 - self.mu**2)*cosphi)*(cosphi < 0)
         path_length = min(abs(z_dist), abs(x_dist))
-        if path_length < self.timestep_dist:
+        if abs(path_length) > abs(max_dist_photoi):
+            path_length = max_dist_photoi
+            self.x += path_length*math.sqrt(1 - self.mu**2)*cosphi
+            self.z += path_length*self.mu
+            self.timestep_dist -= path_length
+        elif path_length < self.timestep_dist:
             # If the particle can reach the border of the cell within the current time step, increment its cell
             if abs(x_dist) < abs(z_dist):
                 # The particle reaches an x-boundary first
@@ -44,14 +50,14 @@ class Particle:
             else:
                 self.cell_k += int(np.sign(self.mu))
             
-            self.x += path_length*np.sqrt(1 - self.mu**2)*cosphi
+            self.x += path_length*math.sqrt(1 - self.mu**2)*cosphi
             self.z += path_length*self.mu
             self.timestep_dist -= path_length
         else:
             # Else move the particle within the cell
             path_length = self.timestep_dist
-            self.x += path_length*np.sqrt(1 - self.mu**2)*cosphi
-            self.z += self.timestep_dist*self.mu
+            self.x += path_length*math.sqrt(1 - self.mu**2)*cosphi
+            self.z += path_length*self.mu
             self.timestep_dist = 0.0
             
         # Return the distance travelled
@@ -59,7 +65,7 @@ class Particle:
             
     def reduce_weight(self, path_length, Sigma):
         # Reduce the particle length by the path length traveled
-        self.w *= np.exp(-Sigma*path_length)
+        self.w *= math.exp(-Sigma*path_length)
 
     def copy(self):
         # Return a deep copy of a particle object, for use in copying the census list

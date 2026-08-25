@@ -1,16 +1,16 @@
 {
-    "Name": "Salzmann",
+    "Name": "Gray_vertical",
     "Max Particles": 10000,
     "Mesh": 
     {
         "Dimension": 2,
-        "Number of Cells": [100, 1],
-        "Domain Bounds": [[0, 0.7], [0, 1]],
-        "Cell Spacing": ["Salzmann", "Linear"],
-        "Boundary Conditions": [["Vacuum", "Vacuum"], ["Reflecting", "Reflecting"]],
+        "Number of Cells": [3, 100],
+        "Domain Bounds": [[0, 0.3], [0, 0.7]],
+        "Cell Spacing": ["Linear", "Linear"],
+        "Boundary Conditions": [["Reflecting", "Reflecting"], ["Vacuum", "Vacuum"]],
         "Particles Sourced Per Cell": 20,
         "Material": "Nitrogen",
-        "Density": [4.3e20]
+        "Density": [2e20]
     },
     "Physics":
     {
@@ -21,10 +21,14 @@
     "Sources": 
     [
         {
-            "Type": "Boundary",
+            "Type": "Plane",
             "Location": 0,
+            "Plane Extents": [0, 0.3],
+            "Parallel Plane": "yz",
+            "Source Face": 1,
             "Particles Sourced Per Time Step": 1000,
-            "Function": "Const",
+            "Function": "Ramp",
+            "Peak Time": 1.0,
             "Temperature": 0.1
         }
     ],
@@ -34,10 +38,10 @@
         "Spectrum": true,
         "Temperatures": true,
         "Average Ionization Level": true,
-        "Energy Balance": false,
-        "Initial Plot Time": 0.2,
-        "Plot Interval": 0.2,
-        "Verbose": true,
+        "Energy Balance": true,
+        "Initial Plot Time": 0.5,
+        "Plot Interval": 0.5,
+        "Verbose": false,
         "Write to File": true,
         "Plot Initial Spectrum": false,
         "Debug": false
@@ -45,7 +49,7 @@
     "Time":
     {
         "Use Num Time Steps": false,
-        "Max Time": 1.0,
+        "Max Time": 3.0,
         "Time Step": 1e-3,
         "Tolerance": 1e-4
     }

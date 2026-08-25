@@ -38,26 +38,26 @@ def blackbody(nu_list, T):
             if Constants.h*nu/T > 600:
                 e[i] = 0.0
             else:
-                e[i] = 2*Constants.h*nu**3/(Constants.c**2)*(np.exp(Constants.h*nu/T) - 1)**-1     # Intensity [keV/cm^2]
+                e[i] = 2*Constants.h*nu**3/(Constants.c**2)*(math.exp(Constants.h*nu/T) - 1)**-1     # Intensity [keV/cm^2]
     else:
         if Constants.h*nu_list/T > 600:
             e = np.array([0.0])
         else:
-            e = np.array([2*Constants.h*nu_list**3/(Constants.c**2)*(np.exp(Constants.h*nu_list/T) - 1)**-1])
+            e = np.array([2*Constants.h*nu_list**3/(Constants.c**2)*(math.exp(Constants.h*nu_list/T) - 1)**-1])
 
     return e
 
 @jit
 def sample_blackbody(T, xi):
     n = 1.0
-    const = np.pi**4/90*xi[0]
+    const = math.pi**4/90*xi[0]
     comp = 1.0
 
     while const > comp:
         n += 1.0
         comp += 1/n**4
 
-    return -1/n*np.log(np.prod(xi[1:]))*T/Constants.h
+    return -1/n*math.log(np.prod(xi[1:]))*T/Constants.h
 
 @jit
 def integrate_planck_in_energy(hnu_low, hnu_high, T):
@@ -71,8 +71,8 @@ def integrate_planck_in_energy(hnu_low, hnu_high, T):
 
     for n in range(1, N_terms + 1):
         nk = n*Constants.h/T
-        flux += np.exp(-n*x_high)*(-nu_high**3/nk - 3*nu_high**2/nk**2 - 3*nu_high/nk**3 - 6/nk**4) \
-                + np.exp(-n*x_low)*(nu_low**3/nk + 3*nu_low**2/nk**2 + 3*nu_low/nk**3 + 6/nk**4)
+        flux += math.exp(-n*x_high)*(-nu_high**3/nk - 3*nu_high**2/nk**2 - 3*nu_high/nk**3 - 6/nk**4) \
+                + math.exp(-n*x_low)*(nu_low**3/nk + 3*nu_low**2/nk**2 + 3*nu_low/nk**3 + 6/nk**4)
         
     return 2*Constants.h/Constants.c**2*flux
 
@@ -88,8 +88,8 @@ def integrate_planck_in_number(hnu_low, hnu_high, T):
 
     for n in range(1, N_terms + 1):
         nk = n*Constants.h/T
-        flux += np.exp(-n*x_low)*(nu_low**2/nk + 2*nu_low/(nk**2) + 2/(nk**3)) \
-              - np.exp(-n*x_high)*(nu_high**2/nk + 2*nu_high/(nk**2) + 2/(nk**3))
+        flux += math.exp(-n*x_low)*(nu_low**2/nk + 2*nu_low/(nk**2) + 2/(nk**3)) \
+              - math.exp(-n*x_high)*(nu_high**2/nk + 2*nu_high/(nk**2) + 2/(nk**3))
 
     return 2/(Constants.c**2)*flux
 
@@ -191,7 +191,7 @@ class Nitrogen():
         #    tbr = sigma_eii*0.5*((Constants.h*Constants.c)**2/(2*np.pi*Constants.me_keV*T))**1.5*np.exp(self.Eth[level - 1]/T)
 
         #log_space_tbr = np.log(sigma_eii*0.5*((Constants.h*Constants.c)**2/(2*np.pi*Constants.me_keV*T))**1.5)
-        log_space_tbr = np.log(sigma_eii*0.5) + 3*np.log(Constants.h*Constants.c) - 1.5*np.log(2*np.pi*Constants.me_keV*T)
+        log_space_tbr = math.log(sigma_eii*0.5) + 3*math.log(Constants.h*Constants.c) - 1.5*math.log(2*math.pi*Constants.me_keV*T)
         log_space_tbr += (self.Eth[level] - self.Eth[level - 1])/T
 
         #tbr = np.exp(log_space_tbr)
@@ -220,13 +220,13 @@ class Nitrogen():
         # The fit equation for photoionization cross section
         x = E/E0 - y0
     
-        y = np.sqrt(x**2 + y1**2)
+        y = math.sqrt(x**2 + y1**2)
     
         mb2cm2 = 1e-18 # Conversion factor from Mb to cm^2
 
         Q = 0.5*P - 5.5 - subshell
     
-        return sigma0*((x - 1)**2 + yw**2)*y**(Q)*(1 + np.sqrt(y/ya))**(-P)*mb2cm2
+        return sigma0*((x - 1)**2 + yw**2)*y**(Q)*(1 + math.sqrt(y/ya))**(-P)*mb2cm2
 
     def pi_n1(self, E):
         # Input - energy in keV
@@ -431,11 +431,11 @@ class Nitrogen():
 
     def rrxs_fitequation(self, A, B, T0, T1, T, C, T2):
         # The fit equation for radiative recombination
-        B += C*np.exp(-T2/T)
+        B += C*math.exp(-T2/T)
         
         is2ins = 1e-9 # Conversion factor from 1/s to 1/ns
         
-        return is2ins*A/(np.sqrt(T/T0)*(1 + np.sqrt(T/T0))**(1 - B)*(1 + np.sqrt(T/T1))**(1 + B))
+        return is2ins*A/(math.sqrt(T/T0)*(1 + math.sqrt(T/T0))**(1 - B)*(1 + math.sqrt(T/T1))**(1 + B))
 
     def rr_n1(self, T):
         A = 6.387e-10
@@ -514,35 +514,35 @@ class Nitrogen():
         
         if method == 0:
             # Drake (2016)
-            coul_log = max(1, (24 - np.log(np.sqrt(mesh.ne[index])/((mesh.Te[index]*1e3)**1.5))))
+            coul_log = max(1, (24 - math.log(math.sqrt(mesh.ne[index])/((mesh.Te[index]*1e3)**1.5))))
             nu_ei = 3e-15*mesh.atom_density[index]*Z_bar**2/((mesh.Te[index]*1e3)**1.5)*coul_log
 
-            sigma_ib = nu_ei/(2*Constants.c)*plasma_freq_sq/(2*np.pi*nu)**2
+            sigma_ib = nu_ei/(2*Constants.c)*plasma_freq_sq/(2*math.pi*nu)**2
         elif method == 1:
             # Johnston and Dawson (1973) [Salzmann 1998 pg 221]
-            vT = np.sqrt(3*mesh.Te[index]*Constants.keV2J/(Constants.me_kg))*Constants.mps2cmpns  
-            classical_dist = self.Z*Constants.e**2/(mesh.Te[index]*Constants.mps2cmpns**2*Constants.keV2J*4*np.pi*Constants.eps0)
-            deBroglie_wvln = Constants.h*Constants.keV2J*Constants.mps2cmpns/(2*np.pi*np.sqrt(Constants.me_kg*mesh.Te[index]*Constants.keV2J))
+            vT = math.sqrt(3*mesh.Te[index]*Constants.keV2J/(Constants.me_kg))*Constants.mps2cmpns  
+            classical_dist = self.Z*Constants.e**2/(mesh.Te[index]*Constants.mps2cmpns**2*Constants.keV2J*4*math.pi*Constants.eps0)
+            deBroglie_wvln = Constants.h*Constants.keV2J*Constants.mps2cmpns/(2*math.pi*math.sqrt(Constants.me_kg*mesh.Te[index]*Constants.keV2J))
             pmin = max(classical_dist, deBroglie_wvln)
 
-            lam = min(vT/(pmin*np.sqrt(plasma_freq_sq)), vT/(pmin*2*np.pi*nu))
+            lam = min(vT/(pmin*math.sqrt(plasma_freq_sq)), vT/(pmin*2*math.pi*nu))
 
-            factor1 = 64*np.pi**3*Z_bar**2*mesh.ne[index]*Constants.e**6*np.log(lam)
-            factor2 = (3*Constants.c*((2*np.pi*nu)**2 - plasma_freq_sq))*(2*np.pi*Constants.me_kg*mesh.Te[index]*Constants.keV2J*Constants.mps2cmpns**2)**1.5
+            factor1 = 64*math.pi**3*Z_bar**2*mesh.ne[index]*Constants.e**6*math.log(lam)
+            factor2 = (3*Constants.c*((2*math.pi*nu)**2 - plasma_freq_sq))*(2*math.pi*Constants.me_kg*mesh.Te[index]*Constants.keV2J*Constants.mps2cmpns**2)**1.5
 
             if (factor1 < 0):
                 sigma_ib = 1
-            elif (2*np.pi*nu)**2 > plasma_freq_sq:
-                sigma_ib = factor1/(factor2*(4*np.pi*Constants.eps0)**3)
+            elif (2*math.pi*nu)**2 > plasma_freq_sq:
+                sigma_ib = factor1/(factor2*(4*math.pi*Constants.eps0)**3)
             else:
                 sigma_ib = 1e6
         else:
             # Zeldovitch and Raizer (1966) [Salzmann 1998 pg 220]
-            factor1 = 8*np.pi/(3*np.sqrt(3.0))*Constants.e**6*(Constants.h*Constants.c)**2/(Constants.me_keV)
-            factor2 = 1/np.sqrt(2*np.pi*Constants.me_keV*mesh.Te[index])
+            factor1 = 8*math.pi/(3*math.sqrt(3.0))*Constants.e**6*(Constants.h*Constants.c)**2/(Constants.me_keV)
+            factor2 = 1/math.sqrt(2*math.pi*Constants.me_keV*mesh.Te[index])
             factor3 = (Z_bar)**2*mesh.ne[index]*(Constants.h*nu*Constants.keV2J*Constants.mps2cmpns**2)**-3
 
-            sigma_ib = factor1*factor2*factor3/(4*np.pi*Constants.eps0)**3
+            sigma_ib = factor1*factor2*factor3/(4*math.pi*Constants.eps0)**3
 
         return sigma_ib
 
@@ -551,7 +551,7 @@ class Nitrogen():
 
         is2ins = 1e-9 # Conversion factor from 1/s to 1/ns
 
-        sigma = is2ins*A*(1 + P*np.sqrt(U))/(X + U)*U**k*np.exp(-U)
+        sigma = is2ins*A*(1 + P*math.sqrt(U))/(X + U)*U**k*math.exp(-U)
 
         return sigma
 
