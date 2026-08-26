@@ -547,6 +547,7 @@ class Nitrogen():
         return sigma_ib
 
     def sigma_fitequation(self, dE, P, A, X, k, Te):
+        # Rate fits for electron impact ionization [Voronov 1997]
         U = dE/Te 
 
         is2ins = 1e-9 # Conversion factor from 1/s to 1/ns
@@ -556,67 +557,73 @@ class Nitrogen():
         return sigma
 
     def sigma_n1(self, Te):
-        dE = 14.5e-3    # Ionization energy in [keV]
+        # dE = 14.5e-3    # Ionization energy in [keV]
         P = 0           # 
         A = 0.482e-7    # Rate coefficient [cm^3/s]
         X = 0.0652
         k = 0.42
 
-        return self.sigma_fitequation(dE, P, A, X, k, Te)
+        return self.sigma_fitequation(self.Eth[0], P, A, X, k, Te)
 
     def sigma_n2(self, Te):
-        dE = 29.6e-3    # Ionization energy in [keV]
+        # dE = 29.6e-3    # Ionization energy in [keV]
         P = 0           # 
         A = 0.298e-7    # Rate coefficient [cm^3/s]
         X = 0.310
         k = 0.30
 
-        return self.sigma_fitequation(dE, P, A, X, k, Te)
+        return self.sigma_fitequation(self.Eth[1], P, A, X, k, Te)
 
     def sigma_n3(self, Te):
-        dE = 47.5e-3    # Ionization energy in [keV]
+        #dE = 47.5e-3    # Ionization energy in [keV]
         P = 1           # 
         A = 0.810e-8    # Rate coefficient [cm^3/s]
         X = 0.350
         k = 0.24
 
-        return self.sigma_fitequation(dE, P, A, X, k, Te)
+        return self.sigma_fitequation(self.Eth[2], P, A, X, k, Te)
 
     def sigma_n4(self, Te):
-        dE = 77.5e-3    # Ionization energy in [keV]
+        #dE = 77.5e-3    # Ionization energy in [keV]
         P = 1           # 
         A = 0.371e-8    # Rate coefficient [cm^3/s]
         X = 0.549
         k = 0.18
 
-        return self.sigma_fitequation(dE, P, A, X, k, Te)
+        return self.sigma_fitequation(self.Eth[3], P, A, X, k, Te)
 
     def sigma_n5(self, Te):
-        dE = 97.9e-3    # Ionization energy in [keV]
+        #dE = 97.9e-3    # Ionization energy in [keV]
         P = 0           # 
         A = 0.151e-8    # Rate coefficient [cm^3/s]
         X = 0.0167
         k = 0.74
 
-        return self.sigma_fitequation(dE, P, A, X, k, Te)
+        return self.sigma_fitequation(self.Eth[4], P, A, X, k, Te)
     
     def sigma_n6(self, Te):
-        dE = 552.1e-3
+        # dE = 552.1e-3
         P = 0
         A = 0.371e-9
         X = 0.546
-        k = 0.16
+        k = 0.29
 
-        return self.sigma_fitequation(dE, P, A, X, k, Te)
+        #if Te < 0.03:
+        #    return 0
+        #else:
+        return self.sigma_fitequation(self.Eth[5], P, A, X, k, Te)
     
     def sigma_n7(self, Te):
-        dE = 667.0e-3
+        # dE = 667.0e-3
         P = 1
         A = 0.777e-10
         X = 0.624
         k = 0.16
 
-        return self.sigma_fitequation(dE, P, A, X, k, Te)
+        #if Te < 0.03:
+        #    return 0
+        #else:
+        return self.sigma_fitequation(self.Eth[6], P, A, X, k, Te)
 
 #    def E_spectral(self, Te, ni):
 #        h = 4.135e-9        # Planck's constant [keV-ns]
