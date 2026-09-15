@@ -7,14 +7,14 @@ Created on Thu Feb 27 17:34:29 2025
 
 import numpy as np
 import scipy
-from numba import jit, int32, float64
+from numba import jit, int32, float64, vectorize
 from numba.experimental import jitclass
 import matplotlib.pyplot as plt
-import Constants
+import Utils.Constants as Constants
 import math
 
-@jit
-def blackbody(nu_list, T):
+@vectorize([float64(float64, float64)])
+def blackbody(nu, T):
     """
     Parameters
     ----------
@@ -27,25 +27,37 @@ def blackbody(nu_list, T):
     Returns
     -------
     e : double
-        The energy density in [keV/cm^2] of photons of energy h*nu for a blackbody 
+        The spectral radiance in [keV/(cm^2 ster)] of photons of energy h*nu for a blackbody 
         emitter at temperature T
     """
 
-    if hasattr(nu_list, "__len__"):
-        e = np.zeros((len(nu_list), ))
-
-        for i, nu in enumerate(nu_list):
-            if Constants.h*nu/T > 600:
-                e[i] = 0.0
-            else:
-                e[i] = 2*Constants.h*nu**3/(Constants.c**2)*(math.exp(Constants.h*nu/T) - 1)**-1     # Intensity [keV/cm^2]
+    if Constants.h*nu/T > 600:
+        e = 0.0
     else:
-        if Constants.h*nu_list/T > 600:
-            e = np.array([0.0])
-        else:
-            e = np.array([2*Constants.h*nu_list**3/(Constants.c**2)*(math.exp(Constants.h*nu_list/T) - 1)**-1])
+        e = 2*Constants.h*nu**3/(Constants.c**2)*(math.exp(Constants.h*nu/T) - 1)**-1
 
     return e
+
+@vectorize([float64(float64, float64)])
+def maxwellian(E, T):
+    """
+    Parameters
+    ----------
+    E : double
+        The electron energy at which to evaluate the Maxwellian distribution in keV
+    T : double 
+        The temperature of the gas in keV
+
+    Returns
+    m : double
+        The probability in [keV^-1] of finding an electron with energy E in a gas 
+        of temperature T
+    -------
+
+    """
+    m = 2*np.sqrt(E/np.pi)*T**-1.5*np.exp(-E/T)
+    
+    return m
 
 @jit
 def sample_blackbody(T, xi):

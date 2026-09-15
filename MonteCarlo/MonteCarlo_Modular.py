@@ -3,7 +3,10 @@
 Created on Wed Feb  5 12:07:35 2025
 
 This script uses a Monte Carlo method to solve a PI Front problem in planar
-geometry
+geometry.
+
+Run as a module to resolve dependencies. Run from Photoionization folder with command:
+python3 -m MonteCarlo.MonteCarlo_Modular
 
 @author: jzola2
 """
@@ -12,27 +15,25 @@ import numpy as np
 import math
 import matplotlib.pyplot as plt
 import time
-import sys
 import os
-sys.path.append("..")
-import CrossSectionFunctions as xsf
+import Utils.CrossSectionFunctions as xsf
 from numba.experimental import jitclass
 from numba.typed import List
 from numba import float64, typeof, jit
 
-from Particle import Particle
-from Mesh import Mesh
-import PlottingFunctions as plot
-import Constants
-import Sources
+from MonteCarlo.Particle import Particle
+from MonteCarlo.Mesh import Mesh
+import MonteCarlo.PlottingFunctions as plot
+import Utils.Constants as Constants
+import MonteCarlo.Sources as Sources
 import json
 
 # Read input file
-with open('Inputs/Gray.json', 'r') as file:
+with open('MonteCarlo/Inputs/Gray.json', 'r') as file:
     inputs = json.load(file)
 
 # Construct file to write out to
-path = '../Data/'
+path = 'Data/'
 file_base = path + 'MC_'
 file_base += inputs["Name"] + "_"
 
@@ -314,9 +315,14 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
 
     # Copy the initial population which can be reused in each iteration
     population = List()
-    #population = []
     for p in census:
         population.append(p.copy())
+
+    # Create a list of particles emitted in this iteration
+    # mat_emit_pop = List.empty_list(typeof(p))
+
+    # Reset accumulated energy from radiative recombination and bremsstrahlung
+    mesh.reset_acc_erg()
 
     # Hold data from previous iterations as convergence criteria
     old_mesh = mesh.copy()
@@ -328,10 +334,12 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
     while (np.any(abs(err) > tol) and it < max_it):
         time1_it = time.time()
         census = List()
-        #census = []
         for p in population:
             census.append(p.copy())
-        #census = copy.deepcopy(population)
+
+        # Add material emission to population. Empty on first iteration.
+        # for p in mat_emit_pop:
+        #     census.append(p.copy())
 
         # Reset particle tally
         mesh.particle_tally[:] = old_mesh.particle_tally[:]
@@ -351,20 +359,28 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
         census, mesh, leaked_energy = advance_particles(census, cutoff, mesh, timestep_dist, old_mesh)
 
         # Calculate the update to ionization level and associated error
-        mesh.update_state(old_mesh, mesh_previt, dt, (1.0 + 0.0*(it == 0)), False) ##########
+        mesh.update_state(old_mesh, 0.99) ##########
+
+        # Empty emission population before sourcing new particles
+        mat_emit_pop = List.empty_list(typeof(census[0]))
         
         time1_recomb = time.time()
         # Use previous iteration's temperatures to source particles from recombination
         if use_rr:
+            # mat_emit_pop = mesh.source_particles_recombination(rng, mat_emit_pop, cutoff, dt)
             census = mesh.source_particles_recombination(rng, census, cutoff, dt)
+
         time2_recomb = time.time()
 
         sourcing_particles_recomb[0] += time2_recomb - time1_recomb
         sourcing_particles_recomb[1] += 1
 
         time1_brems = time.time()
+        # Use previous iteration's temperatures to source particles from bremsstrahlung emission
         if use_b:
+            # mat_emit_pop = mesh.source_particles_bremsstrahlung(rng, mat_emit_pop, cutoff, dt)
             census = mesh.source_particles_bremsstrahlung(rng, census, cutoff, dt)
+
         time2_brems = time.time()
 
         sourcing_particles_brems[0] += time2_brems - time1_brems
@@ -387,6 +403,7 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
         mesh_previt = mesh.copy()
 
         # Debugging: Record flux, Z_bar and T over the first five iterations
+        #######################################################################
         x_loc = 0.15
         x_edges = mesh.get_edges_dim(1)
         x_ind = np.searchsorted(x_edges, x_loc) - 1
@@ -405,6 +422,7 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
                 print("Ion Density potentially oscillating")
             if np.linalg.norm(mesh.flux - mesh_prev_previt.flux) < tol[1]:
                 print("Flux potentially oscillating")
+        #######################################################################
 
         it += 1
 
@@ -418,6 +436,8 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
         print("Flux rel err: {:g}".format(err[1]/tol[1]))
         print("T rel err {:g} \n".format(err[2]/tol[2]))
 
+        # Debugging: Plot error and values over the first five iterations
+        #######################################################################
         if debug_mode:
             plt.figure(55)
             plt.plot(np.arange(max_it), err_per_level.T)
@@ -456,6 +476,7 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
             plt.figure(52)
             plt.legend()
             plt.show()
+        #######################################################################
 
     # TODO: Operator split - perform eii and tbr calculations after converging on photoionization and recombination
     if use_eii:

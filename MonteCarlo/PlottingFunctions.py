@@ -1,9 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import sys
-sys.path.append("..")
-import Constants
-import CrossSectionFunctions as xsf
+import Utils.Constants as Constants
+import Utils.CrossSectionFunctions as xsf
 
 def plot_ionization_level_lineout(mesh, t, dim, loc):
     coords = ['z', 'x']

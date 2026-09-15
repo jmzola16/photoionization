@@ -1,6 +1,6 @@
 import numpy as np
 import scipy
-import CrossSectionFunctions as xsf
+import Utils.CrossSectionFunctions as xsf
 
 Te = 0.1                # Electron temperature [keV]
 Ts = 0.1                # Source temperature [keV]

@@ -1,13 +1,11 @@
 import numpy as np
-import sys
-sys.path.append("..")
-import CrossSectionFunctions as xsf
-import Constants
+import Utils.CrossSectionFunctions as xsf
+import Utils.Constants as Constants
 import matplotlib.pyplot as plt
 from matplotlib import colors
-from Mesh import Mesh
+from MonteCarlo.Mesh import Mesh
 from scipy import integrate, optimize
-from Particle import Particle
+from MonteCarlo.Particle import Particle
 from numba import typeof
 from numba.typed import List
 

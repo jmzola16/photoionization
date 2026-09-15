@@ -1,11 +1,9 @@
 import numpy as np
-import sys
-sys.path.append("..")
 from abc import ABC, abstractmethod
-import Constants
-import CrossSectionFunctions as xsf
+import Utils.Constants as Constants
+import Utils.CrossSectionFunctions as xsf
 import math
-from Particle import Particle
+from MonteCarlo.Particle import Particle
 from numba.typed import List
 from numba import float64, int32
 from numba.experimental import jitclass

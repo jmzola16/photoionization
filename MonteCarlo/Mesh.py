@@ -2,11 +2,9 @@
 # photoionization simulation, such as the ionization level and electron
 # temperature in each cell
 import numpy as np
-import sys
-sys.path.append("..")
-import Constants
-import CrossSectionFunctions as xsf
-from Particle import Particle
+import Utils.Constants as Constants
+import Utils.CrossSectionFunctions as xsf
+from MonteCarlo.Particle import Particle
 import matplotlib.pyplot as plt
 from numba.experimental import jitclass
 from numba import int32, float64, typeof, types
@@ -45,7 +43,9 @@ spec = [
     ('photoi_absorb_tot', float64[:]),
     ('dEpi', float64[:]),
     ('dEib', float64[:]),
+    ('Eb', float64[:]),
     ('dEb', float64[:]),
+    ('Err', float64[:]),
     ('dErr', float64[:]),
     ('dEeii', float64[:]),
     ('dEtbr', float64[:])
@@ -90,7 +90,7 @@ class Mesh:
         self.ni = np.zeros((self.N_cells, N_levels + 1))
         self.dni = np.zeros((self.N_cells, N_levels + 1))
 
-        if len(atom_density) > 1:
+        if not hasattr(atom_density, "__len__") or len(atom_density) > 1:
             self.ni[:, 0] = atom_density
         else:
             self.ni[:, 0] = atom_density[0]*np.ones((self.N_cells, ))
@@ -122,7 +122,9 @@ class Mesh:
         self.photoi_absorb_tot = np.zeros((self.N_cells, ))
         self.dEpi = np.zeros((self.N_cells, ))
         self.dEib = np.zeros((self.N_cells, ))
+        self.Eb = np.zeros((self.N_cells, ))
         self.dEb = np.zeros((self.N_cells, ))
+        self.Err = np.zeros((self.N_cells, ))
         self.dErr = np.zeros((self.N_cells, ))
         self.dEeii = np.zeros((self.N_cells, ))
         self.dEtbr = np.zeros((self.N_cells, ))
@@ -145,9 +147,7 @@ class Mesh:
             for level in range(self.N_levels):
                 if abs(old_mesh.ni[index, level] + self.dni[index, level]) > max(1e-9*max(abs(old_mesh.ni[index, level]), abs(self.dni[index, level])), 1e3):
                     Gamma_pi[level] = self.cell_mats[index].pi_n(Constants.h*photon.nu, level)*self.ni[index, level]
-            #    if use_b:
-            #        Gamma_ib[level] = self.cell_mats[index].ibrem_xs(self, index, photon.nu, 2)*self.ni[index, level]
-            # Gamma_ib[0] = 0 # TODO: Check if this is correct
+
         Gamma_tot = np.sum(Gamma_pi) + np.sum(Gamma_ib)
 
         # Calculate the volume of the cell
@@ -156,29 +156,13 @@ class Mesh:
         for i in range(self.dim - 1):
             lin_index += self.cells_per_dim[i]
             cell_vol *= self.cell_widths[lin_index + cell_i]
-        # cell_vol = self.cell_widths[cell_i]*self.cell_widths[self.cells_per_dim[0] + cell_k]
-
-        photoi_dist = photon.timestep_dist
-        for level in range(self.N_levels):
-            if Gamma_pi[level] > 0 and abs(old_mesh.ni[index, level] + self.dni[index, level]) > max(1e-9*max(abs(old_mesh.ni[index, level]), abs(self.dni[index, level])), 1e4):
-                photoi_dist = min(photoi_dist, -math.log(1 - (old_mesh.ni[index, level] + self.dni[index, level])*Gamma_tot*cell_vol/(Gamma_pi[level]*photon.w))/Gamma_tot)
-
-        if photoi_dist < photon.timestep_dist and photoi_dist > 0:
-        #    rem_timestep_dist = photon.timestep_dist - photoi_dist
-        #    photon.timestep_dist = photoi_dist
-            defined = True
-        else:
-            defined = False
 
         # Move the particle, updating the cell tally in the process
         self.particle_tally[index] -= 1
 
         x_edges = self.get_edges_dim(1)
         z_edges = self.get_edges_dim(0)
-        s = photon.move(x_edges[cell_i:(cell_i + 2)], z_edges[(cell_k):(cell_k + 2)], photoi_dist)
-
-        #if defined:
-        #    photon.timestep_dist += rem_timestep_dist
+        s = photon.move(x_edges[cell_i:(cell_i + 2)], z_edges[(cell_k):(cell_k + 2)])
 
         outside_bounds = self.check_boundary_conditions(photon)
         if not outside_bounds:
@@ -190,11 +174,6 @@ class Mesh:
         else:
             dflux = 1/(Gamma_tot*cell_vol*dt)*photon.w*(1 - math.exp(-Gamma_tot*s))
 
-        if np.sum(Gamma_ib) < 1e-8:
-            brem_flux = dflux
-        else:
-            brem_flux = 1/(np.sum(Gamma_ib)*cell_vol*dt)*photon.w*(1 - math.exp(-np.sum(Gamma_ib)*s))
-
         group = self.find_group(Constants.h*photon.nu)
         self.multigroup_flux[index, group] += dflux*Constants.h*photon.nu/Constants.c
         self.flux[index] += dflux
@@ -204,28 +183,7 @@ class Mesh:
         for level in range(self.N_levels):
             # Calculate the number of photoionized particles for this ionization state
             # If this would photoionize more than remaining particles, reduce to zero instead
-            photoi = min(old_mesh.ni[index, level] + self.dni[index, level], Gamma_pi[level]*dflux*dt)
-            #photoi = Gamma_pi[level]*dflux*dt
-            if photoi_dist <= 0 or (photoi > old_mesh.ni[index, level] + self.dni[index, level] and abs(old_mesh.ni[index, level] + self.dni[index, level] - photoi) > 1e-4*max(abs(old_mesh.ni[index, level] + self.dni[index, level]), abs(photoi))):
-                print("Current atom density: ")
-                print(old_mesh.ni[index, level])
-                print("Remaining atom density: ")
-                print(old_mesh.ni[index, level] + self.dni[index, level])
-                print("Photoionization density: ")
-                print(photoi)
-                print("Photoionization cross section: ")
-                print(Gamma_pi[level])
-                print("Flux: ")
-                print(dflux)
-                print("Remaining photon distance: ")
-                print(photon.timestep_dist)
-                print("Maximum distance to travel without complete ionization: ")
-                print(photoi_dist)
-                print("Distance traveled: ")
-                print(s)
-                print("Distance calculated from photoionization: ")
-                print(-math.log(1 - (photoi)*Gamma_tot*cell_vol/(Gamma_pi[level]*photon.w))/Gamma_tot)
-                assert 0
+            photoi = Gamma_pi[level]*dflux*dt
 
             self.dni[index, level] -= photoi
             self.dni[index, level + 1] += photoi
@@ -233,12 +191,9 @@ class Mesh:
             self.dEpi[index] += photoi*(Constants.h*photon.nu - self.cell_mats[index].Eth[level])
             self.photoi_absorb_tot[index] += photoi*Constants.h*photon.nu
             self.dEib[index] += Gamma_ib[level]*dflux*dt*Constants.h*photon.nu
-            #self.dEib[index] += Gamma_ib[level]*brem_flux*dt*Constants.h*photon.nu
 
             tot_photoi += photoi
 
-        #photon.reduce_weight(s, np.sum(Gamma_ib))
-        #photon.w -= tot_photoi*cell_vol
         photon.reduce_weight(s, Gamma_tot)
 
         return outside_bounds
@@ -323,17 +278,24 @@ class Mesh:
         # This function calculates the rate of recombination in a photoionizing medium
         tot_recomb_rate = np.zeros((self.N_cells, ))
         for cell in range(self.N_cells):
+            # Loop over all cells in the mesh
             if self.atom_density[cell] > 1e12:
                 recomb_rate_per_level = np.zeros((self.N_levels, ))
                 for level in range(self.N_levels):
-                    recomb_rate_per_level[level] = min(self.cell_mats[cell].rr_n(self.Te[cell], level + 1)*self.ne[cell]*self.ni[cell, level + 1]*dt, old_mesh.ni[cell, level + 1] + self.dni[cell, level + 1])
+                    # Calculate the number of ions which recombine on a given level as the rate coefficient times the density times the time
+                    recomb_rate_per_level[level] = self.cell_mats[cell].rr_n(self.Te[cell], level + 1)*self.ne[cell]*self.ni[cell, level + 1]*dt
                     tot_recomb_rate[cell] += recomb_rate_per_level[level]
 
                 self.recomb_rate[cell, :] = recomb_rate_per_level.copy()
 
                 self.dni[cell, :-1] += self.recomb_rate[cell, :]
                 self.dni[cell, 1:] -= self.recomb_rate[cell, :]
+
+                # The energy emitted to radiative recombination photons this iteration. Gets reset to zero every iteration
                 self.dErr[cell] += np.sum(self.recomb_rate[cell, :]*(1.5*self.Te[cell])) # self.cell_mats[cell].Eth + 
+
+                # The accumulated energy emitted to radiative recombination. Gets reset to dErr between iteration
+                # self.Err[cell] += np.sum(self.recomb_rate[cell, :]*(1.5*self.Te[cell]))
 
                 if tot_recomb_rate[cell] > 1e-4:
                     self.N_recomb[cell, :] = np.ceil(recomb_rate_per_level*self.recombination_N_per_cell/tot_recomb_rate[cell]).astype(int32)
@@ -353,9 +315,11 @@ class Mesh:
                 #tbr_rate = min(self.cell_mats[cell].tbr_n(self.Te[cell], level + 1)*self.ne[cell]**2*self.ni[cell, level + 1]*dt, old_mesh.ni[cell, level + 1] + self.dni[cell, level + 1])
 
                 if tbr_rate != tbr_rate:
-                    print("Tbr rate Nan")
+                    print("TBR rate NaN")
                     print("Log space tbr rate: ")
                     print(log_space_tbr)
+                    print("Te: ")
+                    print(self.Te[cell])
                     print("Ne: ")
                     print(self.ne[cell])
                     print("Ni: ")
@@ -448,7 +412,12 @@ class Mesh:
                         photon = Particle(x_pos_in_cell, z_pos_in_cell, mu, phi, nu, wgt, cell_i, cell_k, (dt - start_time)/dt*Constants.c*dt)
 
                         census.append(photon)
+
+                        # The energy emitted to bremsstrahlung radiation in this iteration. Gets reset to 0 between iterations
                         self.dEb[cell] += Constants.h*photon.nu*photon.w/cell_vol
+
+                        # The accumulated energy emitted to bremsstrahlung radiation. Gets set to dEb between iterations
+                        # self.Eb[cell] += Constants.h*photon.nu*photon.w/cell_vol
                         self.particle_tally[cell] += 1
 
                         #if Constants.h*photon.nu*photon.w > 1e16:
@@ -510,13 +479,19 @@ class Mesh:
         # Reset temperature update variables for this iteration
         self.photoi_absorb_tot = np.zeros((self.N_cells, ))
         self.dEpi = np.zeros((self.N_cells, ))
+        self.Err = self.dErr.copy()
         self.dErr = np.zeros((self.N_cells, ))
         self.dEib = np.zeros((self.N_cells, ))
+        self.Eb = self.dEb.copy()
         self.dEb = np.zeros((self.N_cells, ))
         self.dEeii = np.zeros((self.N_cells, ))
         self.dEtbr = np.zeros((self.N_cells, ))
 
         return 0
+
+    def reset_acc_erg(self):
+        self.Err = np.zeros((self.N_cells, ))
+        self.Eb = np.zeros((self.N_cells, ))
     
     def copy(self):
         copied_mesh = Mesh(self.dim, self.cell_edges, self.N_levels, self.cells_per_dim, self.cell_mats[0], self.atom_density, self.recombination_N_per_cell, self.bremsstrahlung_N, self.bcs)
@@ -530,14 +505,47 @@ class Mesh:
 
         return copied_mesh
     
-    def update_state(self, old_mesh, mesh_previt, dt, lam, use_dEsp):
-        ni_update = mesh_previt.dni + lam*(self.dni - mesh_previt.dni)
-        self.ni = np.maximum(0.0, old_mesh.ni + ni_update)
+    def update_state(self, old_mesh, lam):
+        #ni_update = mesh_previt.dni + lam*(self.dni - mesh_previt.dni)
+        if np.any(old_mesh.ni + self.dni) < 0.0:
+            min_ind = np.argmin(old_mesh.ni + self.dni)
+            row_ind = int(min_ind / old_mesh.ni.shape[1])
+            col_ind = int(np.mod(min_ind, old_mesh.ni.shape[1]))
+            alpha = old_mesh.ni[row_ind, col_ind]/abs(self.dni[row_ind, col_ind])*lam
+
+            print(np.min(old_mesh.ni + self.dni))
+            print(old_mesh.ni[row_ind, col_ind] + self.dni[row_ind, col_ind])
+            assert 0
+        else:
+            alpha = 1.0
+
+        ni_update = alpha*self.dni
+        # self.ni = np.maximum(0.0, old_mesh.ni + ni_update)
+        self.ni = old_mesh.ni + ni_update
         self.ne = np.dot(self.ni, np.arange(self.N_levels + 1).astype(float64))
         dne = self.ne - old_mesh.ne
 
         # TODO: Change cv according to \frac{\partial e}{\partial t} = \frac{\partial e}{partial T}*\frac{\partial T}{\partial t}
 
-        self.dT = (self.dEpi + self.dEib + self.dEtbr - self.dEeii - self.dEb - self.dErr - 1.5*self.Te*dne)/xsf.cv(self.Te, self.atom_density + self.ne)
-        T_update = mesh_previt.dT + lam*(self.dT - mesh_previt.dT)
-        self.Te = old_mesh.Te + T_update 
+        self.dT = (alpha*(self.dEpi + self.dEib + self.dEtbr - self.dEeii - self.dEb - self.Err - self.dErr) - 1.5*self.Te*dne)/xsf.cv(self.Te, self.atom_density + self.ne)
+        # T_update = beta*self.dT #mesh_previt.dT + lam*(self.dT - mesh_previt.dT)
+
+        if np.any(old_mesh.Te + self.dT) < 0.0:
+            min_ind = np.argmin(old_mesh.Te + self.dT)
+            beta = old_mesh.Te[min_ind]/abs(self.dT[min_ind])*lam
+        else:
+            beta = 1.0
+
+        if beta < alpha:
+            alpha = beta
+
+            ni_update = alpha*self.dni
+            self.ni = old_mesh.ni + ni_update
+            self.ne = np.dot(self.ni, np.arange(self.N_levels + 1).astype(float64))
+            dne = self.ne - old_mesh.ne
+
+            # TODO: Change cv according to \frac{\partial e}{\partial t} = \frac{\partial e}{partial T}*\frac{\partial T}{\partial t}
+
+            self.dT = (alpha*(self.dEpi + self.dEib + self.dEtbr - self.dEeii - self.dEb - self.Err - self.dErr) - 1.5*self.Te*dne)/xsf.cv(self.Te, self.atom_density + self.ne)
+
+        self.Te = old_mesh.Te + self.dT

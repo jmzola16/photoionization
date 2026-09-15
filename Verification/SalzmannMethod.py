@@ -1,9 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import sys
-sys.path.append("..")
-import CrossSectionFunctions as xsf
-import Constants
+import Utils.CrossSectionFunctions as xsf
+import Utils.Constants as Constants
 
 # Simulation parameters
 num_cells = 40

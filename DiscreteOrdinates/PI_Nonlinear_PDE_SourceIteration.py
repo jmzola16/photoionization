@@ -11,8 +11,7 @@ front using an Sn method with source iteration
 import numpy as np
 import matplotlib.pyplot as plt
 import sys
-sys.path.append("..")
-import CrossSectionFunctions as xsf
+import Utils.CrossSectionFunctions as xsf
 
 N = 8
 M = 100

@@ -4,8 +4,8 @@ import sys
 sys.path.append('./Photoionization')
 sys.path.append('..')
 sys.path.append('Photoionization/Data')
-import CrossSectionFunctions as xsf
-import Constants
+import Utils.CrossSectionFunctions as xsf
+import Utils.Constants as Constants
 import scipy
 import csv
 
