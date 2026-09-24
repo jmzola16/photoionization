@@ -90,10 +90,12 @@ class Mesh:
         self.ni = np.zeros((self.N_cells, N_levels + 1))
         self.dni = np.zeros((self.N_cells, N_levels + 1))
 
-        if not hasattr(atom_density, "__len__") or len(atom_density) > 1:
+        if hasattr(atom_density, "__len__") and len(atom_density) > 1:
             self.ni[:, 0] = atom_density
-        else:
+        elif hasattr(atom_density, "__len__"):
             self.ni[:, 0] = atom_density[0]*np.ones((self.N_cells, ))
+        else:
+            self.ni[:, 0] = atom_density*np.ones((self.N_cells, ))
 
         self.atom_density = self.ni[:, 0].copy()
 
@@ -357,12 +359,11 @@ class Mesh:
                     phi = rng.random()*2*math.pi
                     wgt = self.recomb_rate[cell, level]*cell_vol/(self.N_recomb[cell, level])
                     start_time = dt*rng.random()
-                    xi = rng.random()
 
                     if wgt > cutoff:
-                        cum_dErr[cell] += wgt*(self.cell_mats[cell].Eth[level] + xsf.sample_maxwellian(self.Te[cell], xi))
+                        cum_dErr[cell] += wgt*(self.cell_mats[cell].Eth[level] + xsf.sample_maxwellian(self.Te[cell], rng))
 
-                        nu = (self.cell_mats[cell].Eth[level] + xsf.sample_maxwellian(self.Te[cell], xi))/Constants.h
+                        nu = (self.cell_mats[cell].Eth[level] + xsf.sample_maxwellian(self.Te[cell], rng))/Constants.h
                         photon = Particle(x_pos_in_cell, z_pos_in_cell, mu, phi, nu, wgt, cell_i, cell_k, (dt - start_time)/dt*Constants.c*dt)
 
                         census.append(photon)

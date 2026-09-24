@@ -72,6 +72,42 @@ def sample_blackbody(T, xi):
     return -1/n*math.log(np.prod(xi[1:]))*T/Constants.h
 
 @jit
+def sample_maxwellian(T, rng):
+    Theta = T/Constants.me_keV
+    w = np.zeros((4, ))
+    w[0] = math.gamma(1.5)
+    w[1] = w[0] + math.sqrt(0.5*Theta)*math.gamma(2.0)
+    w[2] = w[1] + Theta*math.gamma(2.5)
+    w[3] = w[2] + Theta*math.sqrt(0.5*Theta)*math.gamma(3.0)
+    w /= w[3]
+
+    p = 1.01
+    y = 0
+
+    while p > (math.sqrt(1 + 0.5*Theta*y**2))/(1 + math.sqrt(0.5*Theta)*y):
+        xi = rng.random()
+
+        if xi < w[0]:
+            z = rng.chisquare(3)
+        elif xi < w[1]:
+            z = rng.chisquare(4)
+        elif xi < w[2]:
+            z = rng.chisquare(5)
+        else:
+            z = rng.chisquare(6)
+
+        y = math.sqrt(z/2)
+
+        p = rng.random()
+
+    gamma_e = 1 + Theta*y**2
+    v_over_c = math.sqrt(1 - gamma_e**-2)
+
+    E = 0.5*Constants.me_keV*v_over_c**2
+
+    return E
+
+@jit
 def integrate_planck_in_energy(hnu_low, hnu_high, T):
     N_terms = 12
     x_low = hnu_low/T
@@ -105,9 +141,9 @@ def integrate_planck_in_number(hnu_low, hnu_high, T):
 
     return 2/(Constants.c**2)*flux
 
-@jit
-def sample_maxwellian(T, xi):
-    return 1.5*T
+#@jit
+#def sample_maxwellian(T, xi):
+#    return 1.5*T
 
 spec = [
     ('Z', int32),

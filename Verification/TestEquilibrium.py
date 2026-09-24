@@ -10,16 +10,21 @@ from scipy.optimize import root
 from numba.typed import List
 from numba import typeof
 
-mat = xsf.Nitrogen()
-N_levels = 7
-T_eq = 0.1      # Equilibrium temperature [keV]
-n0 = 2e20       # Atom density [cm^-3]
+# Define global parameters used in all unit tests
+mat = xsf.Nitrogen()                            # Material
+N_levels = mat.Z                                # Z-number of material
+T_eq = 0.1                                      # Equilibrium temperature [keV]
+n0 = 2e20                                       # Atom density [cm^-3]
 g_q = np.array([4, 1, 2, 1, 2, 1, 2, 1])        # Nitrogen degenerate quantum states
 
-# (1 - np.exp(-Constants.h*nu/T))*
+def stimulated_correction(nu, T):
+    # This function computes the photoionization cross-section correction for stimulated emission
+    return (1 - np.exp(-Constants.h*nu/T))
 
 def bb_photoi_rate(T, level, mat=xsf.Nitrogen()):
-    return 4*np.pi*quad(lambda E : mat.pi_n(E, level)*xsf.blackbody(E/Constants.h, T)/(E*Constants.h), mat.Eth[level], np.inf)[0]
+    # This function computes the integral of the Planck function multiplied with a photoionization cross-section
+    # to calculate the total absorption due to photoionization for Planckian radiation at temperature T
+    return 4*np.pi*quad(lambda E : mat.pi_n(E, level)*stimulated_correction(E/Constants.h, T)*xsf.blackbody(E/Constants.h, T)/(E*Constants.h), mat.Eth[level], np.inf)[0]
 
 def bb_photoi_rate_laguerre(T, level, rel_tol=1e-6, max_quad_points=185, mat=xsf.Nitrogen()):
     converged = False
@@ -68,17 +73,20 @@ def integrate_blackbody_laguerre(n_quad_points, T):
 
     return integral
 
-def saha_eq(n, T=0.1, n_tot=2e20, mat=xsf.Nitrogen()):
+norm_factor = 2*(2*np.pi*Constants.me_keV/(Constants.c**2*Constants.h**2))**1.5
+
+def saha_eq(n, T=0.1, n_tot=n0/norm_factor, mat=xsf.Nitrogen()):
+
     g_q = np.array([4, 1, 2, 1, 2, 1, 2, 1])
     N_levels = mat.Z
-    ne = np.dot(n, np.arange(N_levels + 1))
+    ne = np.dot(np.exp(n), np.arange(N_levels + 1))
 
     out = np.zeros_like(n)
 
     for level in range(N_levels):
-        out[level] = n[level + 1]*ne/n[level] - 2*g_q[level + 1]/g_q[level]*(2*np.pi*Constants.me_keV*T/(Constants.h**2*Constants.c**2))**1.5*np.exp(-mat.Eth[level]/T)
+        out[level] = np.exp(n[level + 1] - n[level])*ne - g_q[level + 1]/g_q[level]*(T)**1.5*np.exp(-mat.Eth[level]/T)
 
-    out[-1] = np.sum(n) - n_tot
+    out[-1] = np.sum(np.exp(n)) - n_tot
 
     return out
 
@@ -87,7 +95,7 @@ def saha_eq_prime(n, mat=xsf.Nitrogen()):
 
     n_J = np.zeros((N_levels + 1, N_levels + 1))
 
-    n_J[-1, :] = np.ones((N_levels + 1, ))
+    n_J[-1, :] = np.exp(n)
 
     for i in range(N_levels):
         for q in range(N_levels + 1):
@@ -95,22 +103,22 @@ def saha_eq_prime(n, mat=xsf.Nitrogen()):
                 diff_sum = 0
                 for level in range(N_levels):
                     if level != i:
-                        diff_sum -= level*n[i + 1]*n[level]/(n[i]**2)
+                        diff_sum -= level*np.exp(n[i + 1] - n[i] + n[level])
 
                 n_J[i, q] = diff_sum
             elif q == (i + 1):
                 diff_sum = 0
                 for level in range(N_levels):
                     if level == i:
-                        diff_sum += q
+                        diff_sum += q*np.exp(n[i + 1])
                     elif level == i + 1:
-                        diff_sum += 2*level*n[i + 1]/n[i]
+                        diff_sum += 2*level*np.exp(2*n[i + 1] - n[i])
                     else:
-                        diff_sum += level*n[level]/n[i]
+                        diff_sum += level*np.exp(n[i + 1] - n[i] + n[level])
 
                 n_J[i, q] = diff_sum
             else:
-                n_J[i, q] = q*n[i + 1]/n[i]
+                n_J[i, q] = q*np.exp(n[i + 1] - n[i] + n[q])
 
     return n_J
 
@@ -133,26 +141,6 @@ for level in range(N_levels):
     laguerre_quad = bb_photoi_rate_laguerre(T_eq, level)
 
     print(f"Level {level} has photoionization rate {skippy_quad:g} with scipy and {laguerre_quad:g} with Laguerre quadrature.")
-
-## TEST 000: Solve Saha equilibrium equation using Newton-Raphson
-ns2s = 1e-9
-m2cm = 1e2
-factor = Constants.me_kg/(Constants.keV2J*ns2s**2*m2cm**2)
-print(f"Unit conversions gives a factor of {factor}, whereas me_keV c^-2 is {Constants.me_keV/(Constants.c**2)}")
-n_guess = np.arange(1, N_levels + 2)*n0/((N_levels + 1)*(N_levels + 2)/2)
-#n_guess = 0.05*n0*np.ones((N_levels + 1, ))/N_levels
-#n_guess[0] = 0.95*n0
-sol = root(saha_eq, n_guess, jac=saha_eq_prime)
-
-n_nr = sol.x
-if sol.success:
-    converged = "converged"
-else:
-    converged = "did not converge"
-
-print(f"NR Saha equation equilibrium level populations {converged} with message '{sol.message}' and are calculated to be: ")
-for level in range(N_levels + 1):
-    print(f"\tLevel {level}: Pop {n_nr[level]}, Diff {sol.fun[level]} ")
 
 ## TEST 0000: Solve Saha equilibrium equation using method in Bowers and Wilson (Ch. 3, pg 104)
 const = 2*(2*np.pi*Constants.me_keV/(Constants.h**2*Constants.c**2*1000))**1.5
@@ -197,6 +185,20 @@ for level in range(N_levels + 1):
     print(f"\tLevel {level}: Pop {n_bw[level]}")
 print(f"\tTotal: {np.sum(n_bw)}")
 
+## TEST 000: Solve Saha equilibrium equation using Newton-Raphson
+#n_guess = np.log(np.arange(1, N_levels + 2)*n0/(norm_factor*(N_levels + 1)*(N_levels + 2)/2))
+sol = root(saha_eq, np.log(n_bw/norm_factor), jac=saha_eq_prime)
+
+n_nr = sol.x
+if sol.success:
+    converged = "converged"
+else:
+    converged = "did not converge"
+
+print(f"NR Saha equation equilibrium level populations {converged} with message '{sol.message}' and are calculated to be: ")
+for level in range(N_levels + 1):
+    print(f"\tLevel {level}: Pop {norm_factor*np.exp(n_nr[level])}, Diff {saha_eq_prime(n_nr)[level]} ")
+
 ## TEST A: Microscopic Spectral Detailed Balance
 
 num_energy_samples = 10000
@@ -217,7 +219,7 @@ for level in range(N_levels):
     rr_rate[level, :] = mat.rr_n(T_eq, level + 1)*ne*n_bw[level + 1]*xsf.maxwellian(energy_samples - mat.Eth[level], T_eq)
 
     for i in range(num_energy_samples):
-        photoi_rate[level, i] = 4*np.pi*xsf.integrate_planck_in_number(energy_edges[i], energy_edges[i + 1], T_eq)*mat.pi_n(energy_samples[i], level)*n_bw[level]
+        photoi_rate[level, i] = 4*np.pi*stimulated_correction(energy_samples[i]/Constants.h , T_eq)*xsf.blackbody(energy_samples[i]/Constants.h, T_eq)/(Constants.h*energy_samples[i])*mat.pi_n(energy_samples[i], level)*n_bw[level]
 
     level_diff = photoi_rate[level, 1000] - rr_rate[level, 1000]
 
@@ -247,10 +249,13 @@ def test_saha_eq(end_time, n0, T, print_out=False):
 
         ne = np.dot(n, np.arange(N_levels + 1))
         rate_matrix[0, 0] = -bb_photoi_rate_per_level[0]
-        rate_matrix[0, 1] = mat.rr_n(T, 1)*ne
+        rate_matrix[0, 1] = mat.rr_n(T, 1)*ne*10
         for level in range(1, N_levels):
             rate_matrix[level, level - 1] = bb_photoi_rate_per_level[level - 1]
-            rate_matrix[level, level] = -mat.rr_n(T, level)*ne - bb_photoi_rate_per_level[level]
+            if level == 1:
+                rate_matrix[level, level] = -mat.rr_n(T, level)*ne*10 - bb_photoi_rate_per_level[level]
+            else:
+                rate_matrix[level, level] = -mat.rr_n(T, level)*ne - bb_photoi_rate_per_level[level]
             rate_matrix[level, level + 1] = mat.rr_n(T, level + 1)*ne
 
         rate_matrix[N_levels, N_levels - 1] = bb_photoi_rate_per_level[N_levels - 1]
@@ -265,7 +270,7 @@ def test_saha_eq(end_time, n0, T, print_out=False):
     if print_out:
         print(f"Equilibrium Check for T={T} keV: ")
         plt.figure()
-    Dq = np.zeros((N_levels))
+    Dq = np.zeros((N_levels, ))
     ne = np.dot(n_out, np.arange(N_levels + 1))
     for level in range(N_levels):
         saha = 2*g_q[level + 1]/g_q[level]*(2*np.pi*Constants.me_keV*T/(Constants.h**2*Constants.c**2))**1.5*np.exp(-mat.Eth[level]/T)
@@ -294,7 +299,7 @@ test_saha_eq(end_time, n0, T_eq, print_out=True)
 
 ## TEST C: Temperature Sweep of Saha Test
 
-T_min = 0.02
+T_min = 0.01
 T_max = 0.1
 N_Temps = 10000
 
@@ -303,14 +308,14 @@ Temps = np.linspace(T_min, T_max, N_Temps)
 Dq_over_temp = np.zeros((N_levels, N_Temps))
 
 for ind, T in enumerate(Temps):
-    Dq_over_temp[:, ind] = test_saha_eq(end_time, n0, T)
+    Dq_over_temp[:, ind] = test_saha_eq(1/T, n0, T)
 
 for level in range(N_levels):
     plt.plot(Temps, Dq_over_temp[level, :])
 plt.xlabel("Temperature [keV]")
 plt.ylabel("Dq")
 plt.legend([str(level) for level in range(N_levels)])
-plt.show()
+#plt.show()
 
 ## TEST D: Relaxation of a Non-Planck Radiation Field
 
@@ -357,7 +362,7 @@ def advance_particles(census, cutoff, mesh, timestep_dist, *varargs):
 def iterative_solver_const_T(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
     # Define error metrics and max iterations
     it = 0
-    err = np.ones((3, ))*np.max(n)
+    err = np.ones((3, ))*np.max(n0)
     err_per_it = np.zeros((3, max_it))
 
     # Copy the initial population which can be reused in each iteration
@@ -414,7 +419,6 @@ times = np.linspace(0, end_time, N_timesteps)
 dt = end_time/N_timesteps
 
 M = np.array([1, 1], dtype=np.int32)
-n = 2e20
 N_recomb_tot = 1000
 N_bremsstrahlung = 0
 
@@ -423,7 +427,7 @@ tol = 1e-4
 max_it = 100
 bcs = np.ones((2*dim, ), dtype=np.int32)
 
-mesh = Mesh(dim, edges, mat.Z, M, mat, n, N_recomb_tot, N_bremsstrahlung, bcs)
+mesh = Mesh(dim, edges, mat.Z, M, mat, n0, N_recomb_tot, N_bremsstrahlung, bcs)
 
 type_photon = Particle(0.1, 0.1, 0.5, np.pi, 800.0, 1.0, 0, 0, 0.0)
 census = List.empty_list(typeof(type_photon))
@@ -434,8 +438,7 @@ rng = np.random.default_rng()
 # Source an initial number of particles
 cell_i = 0
 cell_k = 0
-nu = Constants.GJ2keV*Constants.a*T_eq**4/(N_source*Constants.h)
-w = 1.0
+w0 = Constants.GJ2keV*Constants.a*T_eq**4/N_source
 
 for i in range(N_source):
     z_edges = mesh.get_edges_dim(0)
@@ -447,11 +450,19 @@ for i in range(N_source):
     mu = 2*rng.random() - 1
     phi = 2*np.pi*rng.random()
 
-    photon = Particle(x_loc, z_loc, mu, phi, nu, w, cell_i, cell_k, Constants.c*dt)
+    #xi = rng.random()
+    #nu = xi/Constants.h
+
+    xi = rng.random(5)
+    nu = xsf.sample_blackbody(T_eq, xi)
+
+    #photon = Particle(x_loc, z_loc, mu, phi, nu, w0/xi, cell_i, cell_k, Constants.c*dt)
+    photon = Particle(x_loc, z_loc, mu, phi, nu, w0/Constants.h*nu, cell_i, cell_k, Constants.c*dt)
 
     census.append(photon)
 
 T_rad = np.zeros((N_timesteps, ))
+n_over_time = np.zeros((N_levels + 1, N_timesteps))
 
 print_time = 0.2
 print_int = 0.2
@@ -460,6 +471,7 @@ for ind, t in enumerate(times):
     census, mesh = iterative_solver_const_T(census, cutoff, mesh, Constants.c*dt, tol, max_it, ind)
 
     T_rad[ind] = ((mesh.energy_density[mesh.get_index(cell_i, cell_k)]*Constants.keV2GJ)/Constants.a)**0.25
+    n_over_time[:, ind] = mesh.ni[mesh.get_index(cell_i, cell_k), :]
 
     if t > print_time:
         print(f"Physical time {t} ns")
@@ -468,13 +480,19 @@ for ind, t in enumerate(times):
 plt.figure()
 plt.plot(times, T_rad, c='tab:blue', ls='-', label='Rad. Temp.')
 plt.plot(times, np.ones_like(times)*T_eq, c='tab:orange', ls='--', label='Mat. Temp.')
+plt.xlabel("Time [ns]")
+plt.ylabel("Temperature [keV]")
+plt.xlim([0, end_time])
+plt.ylim([0, 1.5*T_eq])
 plt.legend()
 
-energy_min = 0.001
-energy_max = 1
-num_energy_bins = 20
+energy_min_power = -3
+energy_max_power = 0
+energy_min = 10**energy_min_power
+energy_max = 10**energy_max_power
+num_energy_bins = 100
 energy_bin_edges = np.zeros((num_energy_bins + 1, ))
-energy_bin_edges[1:] = np.logspace(energy_min, energy_max, num_energy_bins)
+energy_bin_edges[1:] = np.logspace(-3, 0, num_energy_bins)
 energy_bin_widths = np.diff(energy_bin_edges)
 energy_bin_centers = energy_bin_edges[:-1] + energy_bin_widths/2
 values = np.zeros_like(energy_bin_centers)
@@ -482,7 +500,7 @@ values = np.zeros_like(energy_bin_centers)
 for p in census:
     energy = Constants.h*p.nu
     energy_idx = np.searchsorted(energy_bin_edges, energy)
-    if energy > energy_max:
+    if energy >= energy_max:
         energy_idx = num_energy_bins - 1
 
     values[energy_idx] += p.w
@@ -494,4 +512,16 @@ plt.bar(energy_bin_centers, values/(np.sum(values)*energy_bin_widths), width=ene
 plt.xlabel("Energy [keV]")
 plt.ylabel("Flux")
 plt.plot(energy_bin_centers, xsf.blackbody(energy_bin_centers/Constants.h, T_eq)/(Constants.h*blackbody_flux), label='Mat. BB')
+plt.legend()
+plt.show()
+
+plt.figure()
+for level in range(N_levels + 1):
+    plt.plot(times, n_over_time[level, :]/n0, label=str(level))
+
+plt.xlabel("Time [ns]")
+plt.ylabel("Ion Fraction [-]")
+plt.xlim([0, end_time])
+plt.ylim([0, 1.0])
+plt.legend()
 plt.show()
