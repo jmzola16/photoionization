@@ -358,9 +358,6 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
 
         census, mesh, leaked_energy = advance_particles(census, cutoff, mesh, timestep_dist, old_mesh)
 
-        # Calculate the update to ionization level and associated error
-        mesh.update_state(old_mesh, 0.99) ##########
-
         # Empty emission population before sourcing new particles
         mat_emit_pop = List.empty_list(typeof(census[0]))
         
@@ -385,6 +382,9 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
 
         sourcing_particles_brems[0] += time2_brems - time1_brems
         sourcing_particles_brems[1] += 1
+
+        # Calculate the update to ionization level and associated error
+        mesh.update_state(old_mesh, 0.5) ##########
 
         err[0] = np.linalg.norm(mesh.ni - mesh_previt.ni)
         err_per_it[0, it] = err[0]
@@ -572,7 +572,7 @@ for t in range(steps):
         plot.plot_radiation_spectrum(mesh, census, 0.0035, 0, 0)
         plt.show()
 
-    old_ni = mesh.ni
+    old_ni = mesh.ni.copy()
 
     # Invoke iterative solver to converge ni, T
     time1 = time.time()
@@ -623,20 +623,19 @@ for t in range(steps):
     total_energy_in_system[t] = system_energy
     total_energy_in_particles[t] = particle_energy
 
-    if be_verbose and abs(total_energy_in_particles[t] - total_energy_in_system[t]) > abs(base_tol*total_energy_in_particles[t]):
+    if be_verbose and abs(total_energy_in_particles[t] - total_energy_in_system[t]) > abs(base_tol*total_energy_in_particles[t]) and max_error_count < 10:
         print("Energy imbalance: ")
         print("Time: {:5.3g}".format(t*dt))
         print("Total Energy in System: {:18.13e}".format(system_energy))
         print("Energy Sourced From Boundary per Step: {:18.13e}".format(boundary_source_energy[t]))
         print("Total Emitted Energy: {:18.13e}".format(tot_emitted_energy[t]))
-        print("Total Absorbed Energy: {:18.13e}".format(np.dot(mesh.photoi_absorb_tot, cell_vols)))
+        print("Total Absorbed Energy: {:18.13e}".format(tot_absorbed_energy[t]))
         print("Change in Material Energy: {:18.13e}".format(delta_material_energy[t]))
         print("Change in Ionization Energy: {:18.13e}".format(internal_ionization_energy[t]))
         print("Leaked Energy: {:18.13e}".format(leaked_energy))
         print("Total Energy in Radiation: {:18.13e}".format(particle_energy))
         print("Total number of particles {:d}".format(len(census)))
-
-        assert 0
+        max_error_count += 1
 
     time1 = time.time()
     # Roulette particles to reduce particle counts

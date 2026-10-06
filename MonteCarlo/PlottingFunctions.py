@@ -142,11 +142,11 @@ def plot_radiation_spectrum(mesh, census, x_pos, z_pos, t, plotSpec):
     local_mat_blackbody_tot = Constants.sigma_SB*mesh.Te[cell_index]**4/(Constants.keV2GJ)
     local_rad_blackbody_tot = Constants.c*(mesh.energy_density[cell_index])/(4*np.pi)
     for index, energy in enumerate(smooth_energy_spectrum):
-        mat_planck_function[index] = xsf.blackbody(energy/Constants.h, mesh.Te[cell_index])[0]/(Constants.h*local_mat_blackbody_tot)
+        mat_planck_function[index] = xsf.blackbody(energy/Constants.h, mesh.Te[cell_index])/(Constants.h*local_mat_blackbody_tot)
         if local_rad_blackbody_tot == 0:
             rad_planck_function[index] = 0
         else:
-            rad_planck_function[index] = xsf.blackbody(energy/Constants.h, (mesh.energy_density[cell_index]*Constants.keV2GJ/Constants.a)**0.25)[0]/(Constants.h*local_rad_blackbody_tot)
+            rad_planck_function[index] = xsf.blackbody(energy/Constants.h, (mesh.energy_density[cell_index]*Constants.keV2GJ/Constants.a)**0.25)/(Constants.h*local_rad_blackbody_tot)
 
 
     for particle in census:
@@ -171,7 +171,7 @@ def plot_radiation_spectrum(mesh, census, x_pos, z_pos, t, plotSpec):
     #    print("Tot. blackbody rad. ", end='')
     #    print(local_blackbody_tot)
     #    print("Max Planck (haha): ", end='')
-    #    print(xsf.blackbody(2.71*mesh.Te[cell]/Constants.h, mesh.Te[cell])[0])
+    #    print(xsf.blackbody(2.71*mesh.Te[cell]/Constants.h, mesh.Te[cell]))
 
     plt.title('Energy spectrum at z=' + str(z_pos))
     plt.xlabel('Energy [keV]')

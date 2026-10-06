@@ -149,6 +149,7 @@ spec = [
     ('Z', int32),
     ('Eth', float64[:]),
     ('Emax', float64[:]),
+    ('g_q', float64[:])
 ]
 
 @jitclass(spec)
@@ -157,6 +158,7 @@ class Nitrogen():
         self.Z = 7
         self.Eth = np.zeros((self.Z, ))
         self.Emax = np.zeros((self.Z, ))
+        self.g_q = np.zeros((self.Z, ))
 
         # Threshhold energies in keV
         self.Eth[0] = 0.01453
@@ -175,6 +177,15 @@ class Nitrogen():
         self.Emax[4] = 0.5043
         self.Emax[5] = 50.000
         self.Emax[6] = 50.000
+
+        # Ground-state degeneracies
+        self.g_q[0] = 4.0
+        self.g_q[1] = 1.0
+        self.g_q[2] = 2.0
+        self.g_q[3] = 1.0
+        self.g_q[4] = 2.0
+        self.g_q[5] = 1.0
+        self.g_q[6] = 2.0
 
     def pi_n(self, E, level):
         if E < self.Eth[level]:
@@ -239,7 +250,7 @@ class Nitrogen():
         #    tbr = sigma_eii*0.5*((Constants.h*Constants.c)**2/(2*np.pi*Constants.me_keV*T))**1.5*np.exp(self.Eth[level - 1]/T)
 
         #log_space_tbr = np.log(sigma_eii*0.5*((Constants.h*Constants.c)**2/(2*np.pi*Constants.me_keV*T))**1.5)
-        log_space_tbr = math.log(sigma_eii*0.5) + 3*math.log(Constants.h*Constants.c) - 1.5*math.log(2*math.pi*Constants.me_keV*T)
+        log_space_tbr = math.log(self.g_q[level - 1]/self.g_q[level]*sigma_eii*0.5) + 3*math.log(Constants.h*Constants.c) - 1.5*math.log(2*math.pi*Constants.me_keV*T)
         log_space_tbr += (self.Eth[level] - self.Eth[level - 1])/T
 
         #tbr = np.exp(log_space_tbr)

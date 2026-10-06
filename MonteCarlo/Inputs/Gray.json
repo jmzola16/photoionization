@@ -14,9 +14,9 @@
     },
     "Physics":
     {
-        "Radiative Recombination": true,
-        "Bremsstrahlung": true,
-        "Electron Impact Ionization": true
+        "Radiative Recombination": false,
+        "Bremsstrahlung": false,
+        "Electron Impact Ionization": false
     },
     "Sources": 
     [
