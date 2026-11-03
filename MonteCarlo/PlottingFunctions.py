@@ -109,7 +109,7 @@ def plot_average_ionization_level_multicell(mesh, t, dim1, dim2):
         plot_average_ionization_level_multicell.num_calls_x += 1
 
 def plot_average_ionization_level_heatmap(mesh, t):
-    if not hasattr(plot_temperatures_heatmap, "num_calls") : plot_temperatures_heatmap.num_calls = 0
+    if not hasattr(plot_average_ionization_level_heatmap, "num_calls") : plot_average_ionization_level_heatmap.num_calls = 0
     z_bar = np.zeros((mesh.N_cells, ))
     for i in range(mesh.N_levels + 1):
         z_bar += i*mesh.ni[:, i]/mesh.atom_density
@@ -123,7 +123,12 @@ def plot_average_ionization_level_heatmap(mesh, t):
     plt.xlabel("z-location")
     plt.ylabel("x-location")
 
+    plot_average_ionization_level_heatmap.num_calls += 1
+
 def plot_radiation_spectrum(mesh, census, x_pos, z_pos, t, plotSpec):
+    if not hasattr(plot_radiation_spectrum, "num_calls") : plot_radiation_spectrum.num_calls = 0
+    standard_color_array_matplotlib = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple", "tab:brown", "tab:pink", "tab:gray", "tab:olive", "tab:cyan"]
+    color = standard_color_array_matplotlib[plot_radiation_spectrum.num_calls]
     x_edges = mesh.get_edges_dim(1)
     z_edges = mesh.get_edges_dim(0)
     cell_i = np.searchsorted(x_edges, x_pos) - 1
@@ -162,7 +167,7 @@ def plot_radiation_spectrum(mesh, census, x_pos, z_pos, t, plotSpec):
 
     rad_spec /= np.sum(rad_spec)*energy_group_widths
 
-    plt.plot(energy_group_centers, rad_spec, label='t='+str(np.round(t, 2)))
+    plt.bar(energy_group_centers, rad_spec, width=energy_group_widths, alpha=0.5, c=color, label='t='+str(np.round(t, 2)))
     if plotSpec:
         plt.plot(smooth_energy_spectrum, mat_planck_function, label='Mat. Planck')
         #plt.plot(smooth_energy_spectrum, rad_planck_function, label='Rad. Planck')
@@ -179,7 +184,7 @@ def plot_radiation_spectrum(mesh, census, x_pos, z_pos, t, plotSpec):
     plt.legend()
 
     plt.figure(200 + int(cell_index))
-    plt.plot(energy_group_centers, mesh.multigroup_flux[cell_index, :]/(mesh.energy_density[cell_index]*energy_group_widths), label=str(np.round(t, 2))+" ns")
+    plt.bar(energy_group_centers, mesh.multigroup_flux[cell_index, :]/(mesh.energy_density[cell_index]*energy_group_widths), width=energy_group_widths, alpha=0.5, c=color, label=str(np.round(t, 2))+" ns")
     if plotSpec:
         plt.plot(smooth_energy_spectrum, mat_planck_function, label='Mat. Planck')
         #plt.plot(smooth_energy_spectrum, rad_planck_function, label='Rad. Planck')
@@ -188,6 +193,8 @@ def plot_radiation_spectrum(mesh, census, x_pos, z_pos, t, plotSpec):
     plt.xlabel('Energy [keV]')
     plt.ylabel('Normalized Spectrum')
     plt.legend()
+
+    plot_radiation_spectrum.num_calls += 1
 
 def plot_temperatures_lineout(mesh, t, Ts, dim, loc):
     if dim == 0 and not hasattr(plot_temperatures_lineout, "num_calls_z") : plot_temperatures_lineout.num_calls_z = 0
@@ -296,6 +303,8 @@ def plot_temperatures_heatmap(mesh, t):
     plt.title("Radiation Temperature [keV] at " + str(t) + " ns")
     plt.xlabel("z-location")
     plt.ylabel("x-location")
+
+    plot_temperatures_heatmap.num_calls += 1
 
 def plot_alpha_lineout(mesh, t, loc):
     if not hasattr(plot_alpha_lineout, "times_called") : plot_alpha_lineout.times_called = 0

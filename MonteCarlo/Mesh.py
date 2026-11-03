@@ -142,30 +142,42 @@ class Mesh:
         Gamma_pi = np.zeros((self.N_levels, ))
         Gamma_ib = np.zeros((self.N_levels, ))
         if self.atom_density[index] > 1e12:
-            # Inverse bremsstrahlung absorption is offset from photoionization absorption, since only
-            # ions can absorb via ib
+            # All absorption should be zero if the density is too low to avoid temperature swings in "void" regions
+            # TODO: Make minimum density a parameter we can pass to mesh initialization
             if use_b:
+                # Inverse bremsstrahlung absorption is offset from photoionization absorption, since only
+                # ions can absorb via ib
                 Gamma_ib = self.cell_mats[index].ibrem_xs(self, index, photon.nu, 2)*self.ni[index, 1:]
             for level in range(self.N_levels):
-                #if abs(old_mesh.ni[index, level] + self.dni[index, level]) > max(1e-9*max(abs(old_mesh.ni[index, level]), abs(self.dni[index, level])), 1e3):
-                    # If the update is greater than 0 for this time step
-                Gamma_pi[level] = self.cell_mats[index].pi_n(Constants.h*photon.nu, level)*self.ni[index, level]
+                if abs(old_mesh.ni[index, level] + self.dni[index, level]) > max(1e-9*max(abs(old_mesh.ni[index, level]), abs(self.dni[index, level])), 1e3):
+                    # If the accumulated remaining ion density is greater than 0 for this time step, calculate the PI cross-section for this particle. 
+                    # Otherwise, keep it at 0. 
+                    # TODO: This is likely wrong as it implies that particle order in the list matters when determining absorption. However, it should only
+                    # occur when ni is low and \Gamma_pi ~ 0 anyway, so it shouldn't have a huge effect. 
+                    Gamma_pi[level] = self.cell_mats[index].pi_n(Constants.h*photon.nu, level)*self.ni[index, level]
 
         Gamma_tot = np.sum(Gamma_pi) + np.sum(Gamma_ib)
 
         # Calculate the volume of the cell
+        # TODO: Write this as a separate function in Mesh. Also extend Mesh class to work for 1, 2 or 3D
         cell_vol = self.cell_widths[cell_k]
         lin_index = 0
         for i in range(self.dim - 1):
             lin_index += self.cells_per_dim[i]
             cell_vol *= self.cell_widths[lin_index + cell_i]
 
+        # Compute the maximum distance a particle can travel before fully one of the levels
+        photoi_dist = photon.timestep_dist
+        for level in range(self.N_levels):
+            if Gamma_pi[level] > 0 and abs(old_mesh.ni[index, level] + self.dni[index, level]) > max(1e-9*max(abs(old_mesh.ni[index, level]), abs(self.dni[index, level])), 1e4):
+                photoi_dist = min(photoi_dist, -math.log(1 - (old_mesh.ni[index, level] + self.dni[index, level])*Gamma_tot*cell_vol/(Gamma_pi[level]*photon.w))/Gamma_tot)
+
         # Move the particle, updating the cell tally in the process
         self.particle_tally[index] -= 1
 
         x_edges = self.get_edges_dim(1)
         z_edges = self.get_edges_dim(0)
-        s = photon.move(x_edges[cell_i:(cell_i + 2)], z_edges[(cell_k):(cell_k + 2)])
+        s = photon.move(x_edges[cell_i:(cell_i + 2)], z_edges[(cell_k):(cell_k + 2)], photoi_dist)
 
         outside_bounds = self.check_boundary_conditions(photon)
         if not outside_bounds:
@@ -185,7 +197,7 @@ class Mesh:
         tot_photoi = 0
         for level in range(self.N_levels):
             # Calculate the number of photoionized particles for this ionization state
-            photoi = Gamma_pi[level]*dflux*dt
+            photoi = min(old_mesh.ni[index, level] + self.dni[index, level], Gamma_pi[level]*dflux*dt)
 
             self.dni[index, level] -= photoi
             self.dni[index, level + 1] += photoi
@@ -301,6 +313,8 @@ class Mesh:
     def calculate_tbr_rate(self, old_mesh, dt):
         for cell in range(self.N_cells):
             for level in range(self.N_levels):
+                if self.Te[cell] <= 0:
+                    print(f"WARNING: Te in cell {cell} is {self.Te[cell]}")
                 if self.ne[cell] <= 0 or self.ni[cell, level + 1] <= 0:
                     log_space_tbr = 1
                     tbr_rate = 0
@@ -499,59 +513,35 @@ class Mesh:
 
         return copied_mesh
     
-    def update_state(self, old_mesh, lam):
-        #ni_update = mesh_previt.dni + lam*(self.dni - mesh_previt.dni)
-        if np.any(old_mesh.ni + self.dni < 0.0):
-            min_ind = np.argmin(old_mesh.ni + self.dni)
-            row_ind = int(min_ind / old_mesh.ni.shape[1])
-            col_ind = int(np.mod(min_ind, old_mesh.ni.shape[1]))
-
-            alpha = min(old_mesh.ni[row_ind, col_ind]/abs(self.dni[row_ind, col_ind])*lam, 1.0)
-
-            # print(np.min(old_mesh.ni + self.dni))
-            # print(old_mesh.ni[row_ind, col_ind] + self.dni[row_ind, col_ind])
-            # print(alpha)
-            # print(old_mesh.ni[row_ind, col_ind] + alpha*self.dni[row_ind, col_ind])
-            # print()
-            # assert 0
-        else:
-            alpha = 1.0
-
-        ni_update = alpha*self.dni
-        # self.ni = np.maximum(0.0, old_mesh.ni + ni_update)
+    def update_state(self, old_mesh, mesh_previt):
+        ni_update = np.where(old_mesh.ni + self.dni > 0.0, self.dni, mesh_previt.dni)
+        #ni_update = self.dni*(old_mesh.ni + self.dni > 0.0)
+        #self.ni = np.maximum(0.0, old_mesh.ni + ni_update)
         self.ni = old_mesh.ni + ni_update
         self.ne = np.dot(self.ni, np.arange(self.N_levels + 1).astype(float64))
         dne = self.ne - old_mesh.ne
 
+        # self.dni = self.dni*(old_mesh.ni + self.dni <= 0.0)
+
         # TODO: Change cv according to \frac{\partial e}{\partial t} = \frac{\partial e}{partial T}*\frac{\partial T}{\partial t}
 
-        self.dT = (alpha*(self.dEpi + self.dEib + self.dEtbr - self.dEeii - self.dEb - self.Err - self.dErr) - 1.5*self.Te*dne)/xsf.cv(self.Te, self.atom_density + self.ne)
+        self.dT = (self.dEpi + self.dEib + self.dEtbr - self.dEeii - self.dEb - self.Err - self.dErr - 1.5*self.Te*dne)/xsf.cv(self.Te, self.atom_density + self.ne)
         # T_update = beta*self.dT #mesh_previt.dT + lam*(self.dT - mesh_previt.dT)
-
-        if np.any(old_mesh.Te + self.dT < 0.0):
-            min_ind = np.argmin(old_mesh.Te + self.dT)
-            beta = old_mesh.Te[min_ind]/abs(self.dT[min_ind])*lam
-
-            #print(np.min(old_mesh.Te + self.dT))
-            #print(old_mesh.Te[min_ind] + self.dT[min_ind])
-            #print(beta)
-        else:
-            beta = 1.0
-
-        if beta < alpha:
-            alpha = beta
-
-            ni_update = alpha*self.dni
-            self.ni = old_mesh.ni + ni_update
-            self.ne = np.dot(self.ni, np.arange(self.N_levels + 1).astype(float64))
-            dne = self.ne - old_mesh.ne
-
-            # TODO: Change cv according to \frac{\partial e}{\partial t} = \frac{\partial e}{partial T}*\frac{\partial T}{\partial t}
-
-            self.dT = (alpha*(self.dEpi + self.dEib + self.dEtbr - self.dEeii - self.dEb - self.dErr) - 1.5*self.Te*dne)/xsf.cv(self.Te, self.atom_density + self.ne)
-
-            #print(old_mesh.Te[min_ind] + self.dT[min_ind])
-#
-            #assert 0
-
         self.Te = old_mesh.Te + self.dT
+
+        # Debugging information:
+        end = False
+        if np.any(self.ni < 0):
+            min_ni = np.min(self.ni)
+            print(f"At least one value of ni is negative: {min_ni}")
+            end = True
+
+        if np.any(self.Te <= 0):
+            min_T = np.min(self.Te)
+            print(f"At least one value of T is negatie or zero: {min_T}")
+            end = True
+
+        if end:
+            assert 0
+
+        return ni_update

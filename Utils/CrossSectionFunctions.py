@@ -11,7 +11,11 @@ from numba import jit, int32, float64, vectorize
 from numba.experimental import jitclass
 import matplotlib.pyplot as plt
 import Utils.Constants as Constants
+import Utils.Utils as ut
 import math
+from scipy.special import roots_laguerre
+
+E_list, wgts = roots_laguerre(120)
 
 @vectorize([float64(float64, float64)])
 def blackbody(nu, T):
@@ -144,6 +148,49 @@ def integrate_planck_in_number(hnu_low, hnu_high, T):
 #@jit
 #def sample_maxwellian(T, xi):
 #    return 1.5*T
+spec = [
+    ('Z', int32),
+    ('Eth', float64),
+    ('Emax', float64),
+    ('g_q', float64)
+]
+@jitclass(spec)
+class Hydrogen():
+    def __init__(self):
+        self.Z = 1
+        self.Eth = 0.0136
+        self.Emax = 100
+        self.g_q = 2
+
+    def pi_n(self, E):
+        gamma_pi = 32*Constants.h*Constants.c/(Constants.me_keV*3**1.5)*(self.Eth/E)**3
+        return gamma_pi
+
+    def sigma_pi_bar(self, T):
+        sigma_pi_bar = 0
+        tot = 0
+        for ind, E in enumerate(E_list):
+            sigma_pi_bar += wgts[ind]*self.pi_n(E)/(Constants.h*E)*blackbody(E/Constants.h, T)*np.exp(E)
+
+        tot = 4*np.pi*Constants.zeta3/(Constants.c**2*Constants.h**3)*T**3
+
+        return sigma_pi_bar/tot
+
+    def rr_n(self, T):
+        y = self.Eth/T
+        R_rr = 16*math.sqrt(math.pi)/(3*math.sqrt(3))*(Constants.e**4/(Constants.me_kg**2*Constants.c**4*Constants.eps0**2))*y**1.5*ut.exp1(y)
+        return R_rr
+
+    def flec_fact(self, T, ni, dt):
+        f = 1/(1 + 2*self.rr_n(T)*ni*dt)
+        return f
+
+    def sigma_eff(self, E, T, n0, n1, f):
+        if E < self.Eth:
+            return 0
+        
+        return self.pi_n(E)*n0 - f*self.rr_n(T)*n1
+
 
 spec = [
     ('Z', int32),

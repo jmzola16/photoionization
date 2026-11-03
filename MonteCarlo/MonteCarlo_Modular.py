@@ -104,9 +104,12 @@ edges = np.zeros((np.sum(M) + dim, ))
 start = 0
 end = M[0] + 1
 for i in range(dim):
+    # For each dimension of cells
     if mesh_params["Cell Spacing"][i].lower() == "linear":
+        # Each cell is evenly spaced
         edges[start:end] = np.linspace(bounds[i, 0], bounds[i, 1], M[i] + 1)
     elif mesh_params["Cell Spacing"][i].lower() == "salzmann":
+        # Each cell is 7% wider than the previous cell
         edges[start + 1] = 5e-4
         width = 5e-4
         for j in range(M[i] - 1):
@@ -121,6 +124,7 @@ for i in range(dim):
         edges[(start + M1):end] = np.linspace(bounds[1]*0.2, bounds[1], M2)
 
     if i < dim - 1:
+        # Move the start and end to the next set of cells
         start += end
         end += M[i + 1] + 1
 
@@ -384,19 +388,19 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
         sourcing_particles_brems[1] += 1
 
         # Calculate the update to ionization level and associated error
-        mesh.update_state(old_mesh, 0.5) ##########
+        ni_update = mesh.update_state(old_mesh, mesh_previt) ##########
 
-        err[0] = np.linalg.norm(mesh.ni - mesh_previt.ni)
+        err[0] = np.linalg.norm((mesh.ni - mesh_previt.ni))/math.sqrt(mesh.ni.size)
         err_per_it[0, it] = err[0]
         for i in range(mesh.N_levels):
-            err_per_level[i, it] = np.linalg.norm(mesh.ni[i, :] - mesh_previt.ni[i, :])
+            err_per_level[i, it] = np.linalg.norm((mesh.ni[i, :] - mesh_previt.ni[i, :]))/math.sqrt(mesh.ni[i, :].size)
         
         # Calculate the error from flux
-        err[1] = np.linalg.norm(mesh.flux - mesh_previt.flux)
+        err[1] = np.linalg.norm((mesh.flux - mesh_previt.flux))/math.sqrt(mesh.flux.size)
         err_per_it[1, it] = err[1]
         
         # Calculate error from material temperature and update
-        err[2] = np.linalg.norm(mesh.Te - mesh_previt.Te)
+        err[2] = np.linalg.norm((mesh.Te - mesh_previt.Te))/math.sqrt(mesh.Te.size)
         err_per_it[2, it] = err[2]
 
         mesh_prev_previt = mesh_previt.copy()
@@ -415,7 +419,7 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
             T_five_it[:, it] = mesh.Te[start:end]
         
         # Debugging: Check if oscillations occur
-        if debug_mode and it > 1:
+        if debug_mode and it > max_it/2:
             if np.linalg.norm(mesh.Te - mesh_prev_previt.Te) < tol[2]:
                 print("Temperature potentially oscillating")
             if np.linalg.norm(mesh.ni - mesh_prev_previt.ni) < tol[0]:
@@ -477,6 +481,10 @@ def iterative_solver(census, cutoff, mesh, timestep_dist, tol, max_it, seed):
             plt.legend()
             plt.show()
         #######################################################################
+
+    # Finalize updates to dni for those parameters which would have gone to zero but we prevented from doing so
+    mesh.dni = mesh.dni - ni_update
+    mesh.ni = np.where(mesh.ni + mesh.dni <= 0.0, 0.0, mesh.ni)
 
     # TODO: Operator split - perform eii and tbr calculations after converging on photoionization and recombination
     if use_eii:
